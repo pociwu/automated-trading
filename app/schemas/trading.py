@@ -40,6 +40,36 @@ class StrategySellRequest(BaseModel):
         return value.strip().upper()
 
 
+class MarketBuyRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=20)
+    quantity: int = Field(gt=0)
+    stop_price: Decimal | None = Field(default=None, gt=0)
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        return value.strip().upper()
+
+
+class MarketSellRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=20)
+    quantity: int = Field(gt=0)
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        return value.strip().upper()
+
+
+class MarketStrategySellRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=20)
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        return value.strip().upper()
+
+
 class StopPriceRequest(BaseModel):
     stop_price: Decimal | None = Field(default=None, gt=0)
 

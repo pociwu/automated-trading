@@ -8,6 +8,8 @@ import streamlit as st
 
 
 API_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/") + "/api/v1"
+refresh_setting = os.getenv("MARKET_QUOTE_REFRESH_INTERVAL", "5s").strip().lower()
+MARKET_QUOTE_REFRESH_INTERVAL = None if refresh_setting == "off" else refresh_setting
 
 st.set_page_config(page_title="模擬程式交易", page_icon="📈", layout="wide")
 st.title("模擬程式交易")
@@ -28,6 +30,92 @@ def api(method: str, path: str, **kwargs):
                 detail = exc.response.text
         st.error(detail or f"無法連線至 API：{exc}")
         return None
+
+
+def show_intraday_quote(quote: dict) -> None:
+    metrics = st.columns(4)
+    metrics[0].metric("最新成交價", f'NT$ {float(quote["price"]):,.2f}')
+    metrics[1].metric("委買價", f'NT$ {float(quote["bid"]):,.2f}' if quote.get("bid") else "—")
+    metrics[2].metric("委賣價", f'NT$ {float(quote["ask"]):,.2f}' if quote.get("ask") else "—")
+    metrics[3].metric("股票名稱", quote.get("name") or "—")
+    quoted_at = pd.Timestamp(quote["quoted_at"]).tz_convert("Asia/Taipei").strftime("%Y-%m-%d %H:%M:%S")
+    st.caption(f'行情時間：{quoted_at}｜來源：{quote["source"]}｜每 5 秒更新')
+
+
+@st.fragment(run_every=MARKET_QUOTE_REFRESH_INTERVAL)
+def render_market_buy() -> None:
+    symbol = st.text_input("股票代號", placeholder="2330", key="market_buy_symbol").strip().upper()
+    if not symbol:
+        st.info("輸入股票代號後，系統會自動載入即時行情。")
+        return
+
+    quote = api("GET", f"/market-data/intraday/{symbol}")
+    if not quote:
+        st.warning("尚未取得有效行情，因此無法送出買進。")
+        return
+    show_intraday_quote(quote)
+    st.caption("送出時後端會再次取得最新成交價，不使用瀏覽器中的舊價格。")
+
+    with st.form("market_buy_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        quantity = c1.number_input("股數", min_value=1, step=1)
+        stop = c2.number_input("S 點停損價（0 表示未設定）", min_value=0.0, step=0.5)
+        if st.form_submit_button("依最新價確認模擬買進", type="primary"):
+            result = api(
+                "POST",
+                "/trades/buy-market",
+                json={"symbol": symbol, "quantity": quantity, "stop_price": stop or None},
+            )
+            if result:
+                st.success(f'買進完成，實際模擬成交價 NT$ {float(result["price"]):,.2f}')
+                st.rerun()
+
+
+@st.fragment(run_every=MARKET_QUOTE_REFRESH_INTERVAL)
+def render_market_sell(holdings: list[dict]) -> None:
+    by_symbol = {row["symbol"]: row for row in holdings}
+    symbol = st.selectbox("股票代號", list(by_symbol), key="market_sell_symbol")
+    quote = api("GET", f"/market-data/intraday/{symbol}")
+    if not quote:
+        st.warning("尚未取得有效行情，因此無法送出賣出。")
+        return
+    show_intraday_quote(quote)
+    st.caption("送出時後端會再次取得最新成交價，不使用瀏覽器中的舊價格。")
+
+    completed_stage = int(by_symbol[symbol]["sell_stage"])
+    st.subheader("4:2:4 分段賣出")
+    st.caption(
+        f"目前已完成第 {completed_stage} 段；下一段比例為 "
+        f"{[40, 20, 40][completed_stage] if completed_stage < 3 else 0}%"
+    )
+    with st.form("market_sell_424_form"):
+        if st.form_submit_button(
+            "依最新價執行下一段 4:2:4 賣出",
+            type="primary",
+            disabled=completed_stage >= 3,
+        ):
+            result = api("POST", "/trades/sell-424-market", json={"symbol": symbol})
+            if result:
+                st.success(f'分段賣出完成，實際模擬成交價 NT$ {float(result["price"]):,.2f}')
+                st.rerun()
+
+    st.divider()
+    st.subheader("指定股數賣出")
+    maximum = int(by_symbol[symbol]["available_quantity"])
+    if maximum <= 0:
+        st.info("此持股目前全部被等待中委託保留，請先取消委託。")
+        return
+    with st.form("market_sell_form"):
+        quantity = st.number_input("賣出股數", min_value=1, max_value=maximum, step=1)
+        if st.form_submit_button("依最新價確認模擬賣出", type="primary"):
+            result = api(
+                "POST",
+                "/trades/sell-market",
+                json={"symbol": symbol, "quantity": quantity},
+            )
+            if result:
+                st.success(f'賣出完成，實際模擬成交價 NT$ {float(result["price"]):,.2f}')
+                st.rerun()
 
 
 dashboard = api("GET", "/dashboard")
@@ -110,54 +198,7 @@ with tab_orders:
                 st.rerun()
 
 with tab_buy:
-    quote_col, refresh_col = st.columns([3, 1])
-    quote_symbol = quote_col.text_input(
-        "即時行情股票代號",
-        placeholder="2330",
-        key="buy_quote_symbol",
-    ).strip().upper()
-    if refresh_col.button("查詢／更新即時股價", type="primary", use_container_width=True):
-        if not quote_symbol:
-            st.error("請先輸入股票代號")
-        else:
-            quote = api("GET", f"/market-data/intraday/{quote_symbol}")
-            if quote:
-                st.session_state["buy_intraday_quote"] = quote
-
-    quote = st.session_state.get("buy_intraday_quote")
-    if quote and quote.get("symbol") == quote_symbol:
-        quote_metrics = st.columns(4)
-        quote_metrics[0].metric("最新成交價", f'NT$ {float(quote["price"]):,.2f}')
-        quote_metrics[1].metric("委買價", f'NT$ {float(quote["bid"]):,.2f}' if quote.get("bid") else "—")
-        quote_metrics[2].metric("委賣價", f'NT$ {float(quote["ask"]):,.2f}' if quote.get("ask") else "—")
-        quote_metrics[3].metric("股票名稱", quote.get("name") or "—")
-        st.caption(f'行情時間：{quote["quoted_at"]}｜來源：{quote["source"]}')
-
-    with st.form("buy_form", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        symbol = c1.text_input("股票代號", value=quote_symbol, disabled=True)
-        name = c2.text_input(
-            "股票名稱",
-            value=quote.get("name", "") if quote and quote.get("symbol") == quote_symbol else "",
-            placeholder="台積電",
-        )
-        c4, c5, c6 = st.columns(3)
-        quantity = c4.number_input("股數", min_value=1, step=1)
-        suggested_price = (
-            float(quote["price"])
-            if quote and quote.get("symbol") == quote_symbol
-            else 0.01
-        )
-        price = c5.number_input("成交價", min_value=0.01, value=suggested_price, step=0.5)
-        stop = c6.number_input("S 點停損價（0 表示未設定）", min_value=0.0, step=0.5)
-        if st.form_submit_button("確認模擬買進", type="primary"):
-            result = api("POST", "/trades/buy", json={
-                "symbol": symbol, "name": name, "quantity": quantity, "price": price,
-                "stop_price": stop or None,
-            })
-            if result:
-                st.success("買進完成")
-                st.rerun()
+    render_market_buy()
 
 with tab_prices:
     symbols = [row["symbol"] for row in dashboard.get("holdings", [])] if dashboard else []
@@ -206,28 +247,7 @@ with tab_sell:
     if not holdings:
         st.info("目前沒有可賣出的持股。")
     else:
-        by_symbol = {row["symbol"]: row for row in holdings}
-        st.subheader("4:2:4 分段賣出")
-        with st.form("sell_424_form"):
-            strategy_symbol = st.selectbox("股票代號", list(by_symbol), key="strategy_sell_symbol")
-            completed_stage = int(by_symbol[strategy_symbol]["sell_stage"])
-            st.caption(f"目前已完成第 {completed_stage} 段；下一段比例為 {[40, 20, 40][completed_stage] if completed_stage < 3 else 0}%")
-            strategy_price = st.number_input("成交價", min_value=0.01, step=0.5, key="strategy_sell_price")
-            if st.form_submit_button("執行下一段 4:2:4 賣出", type="primary", disabled=completed_stage >= 3):
-                if api("POST", "/trades/sell-424", json={"symbol": strategy_symbol, "price": strategy_price}):
-                    st.success("分段賣出完成")
-                    st.rerun()
-        st.divider()
-        st.subheader("指定股數賣出")
-        with st.form("sell_form"):
-            symbol = st.selectbox("股票代號", list(by_symbol), key="sell_symbol")
-            maximum = int(by_symbol[symbol]["quantity"])
-            quantity = st.number_input("賣出股數", min_value=1, max_value=maximum, step=1)
-            price = st.number_input("成交價", min_value=0.01, step=0.5, key="sell_price")
-            if st.form_submit_button("確認模擬賣出", type="primary"):
-                if api("POST", "/trades/sell", json={"symbol": symbol, "quantity": quantity, "price": price}):
-                    st.success("賣出完成")
-                    st.rerun()
+        render_market_sell(holdings)
 
 with tab_history:
     trades = api("GET", "/trades")

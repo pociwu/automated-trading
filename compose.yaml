@@ -57,6 +57,7 @@ services:
     command: ["streamlit", "run", "streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]
     environment:
       API_BASE_URL: http://api:8000
+      MARKET_QUOTE_REFRESH_INTERVAL: ${MARKET_QUOTE_REFRESH_INTERVAL:-5s}
       TZ: Asia/Taipei
     ports:
       - "7788:8501"

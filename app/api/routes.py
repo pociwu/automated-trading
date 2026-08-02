@@ -11,6 +11,9 @@ from app.schemas.trading import (
     LimitOrderCreate,
     LimitOrderRead,
     MarketQuoteRead,
+    MarketBuyRequest,
+    MarketSellRequest,
+    MarketStrategySellRequest,
     MarketDataHealthRead,
     PriceUpdateRequest,
     PriceUpdateResult,
@@ -25,6 +28,7 @@ from app.services.market_data import (
     TwseMarketDataProvider,
 )
 from app.services.market_data_health import MarketDataHealthService
+from app.services.market_orders import MarketOrderService
 from app.services.orders import OrderService
 from app.services.trading import TradingService
 
@@ -56,14 +60,50 @@ def buy(payload: BuyRequest, db: Session = Depends(get_db)) -> Trade:
     return TradingService(db).buy(payload)
 
 
+@router.post("/trades/buy-market", response_model=TradeRead, status_code=201)
+def buy_market(
+    payload: MarketBuyRequest,
+    db: Session = Depends(get_db),
+    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+) -> Trade:
+    try:
+        return MarketOrderService(db, provider).buy(payload)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post("/trades/sell", response_model=TradeRead, status_code=201)
 def sell(payload: SellRequest, db: Session = Depends(get_db)) -> Trade:
     return TradingService(db).sell(payload)
 
 
+@router.post("/trades/sell-market", response_model=TradeRead, status_code=201)
+def sell_market(
+    payload: MarketSellRequest,
+    db: Session = Depends(get_db),
+    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+) -> Trade:
+    try:
+        return MarketOrderService(db, provider).sell(payload)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post("/trades/sell-424", response_model=TradeRead, status_code=201)
 def sell_424(payload: StrategySellRequest, db: Session = Depends(get_db)) -> Trade:
     return TradingService(db).sell_next_424_stage(payload)
+
+
+@router.post("/trades/sell-424-market", response_model=TradeRead, status_code=201)
+def sell_424_market(
+    payload: MarketStrategySellRequest,
+    db: Session = Depends(get_db),
+    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+) -> Trade:
+    try:
+        return MarketOrderService(db, provider).sell_next_424_stage(payload)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/orders", response_model=LimitOrderRead, status_code=201)

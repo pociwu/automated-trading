@@ -9,7 +9,8 @@
 - 賣出 4:2:4 策略與 S 點全數停損。
 - TWSE OpenAPI 每日收盤價同步。
 - Fugle raw WebSocket 盤中 `trades` 行情。
-- 買進頁可按股票代號查詢 Fugle 最新成交價與最佳委買／委賣價。
+- 立即買進與賣出畫面每 5 秒更新 Fugle 最新成交價與最佳委買／委賣價。
+- 市價模擬成交會由後端在送出瞬間重新取價；沒有有效行情時不允許送出。
 - GTC 限價單、資金／持股保留、取消與模擬撮合。
 - Fugle 連線 heartbeat、最後訊息／tick 時間與 stale tick 保護。
 - Alembic 管理資料庫 schema。

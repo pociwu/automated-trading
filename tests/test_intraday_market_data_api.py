@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import routes
+from app.core.database import get_db
 from app.schemas.trading import IntradayQuoteRead
 
 
@@ -38,3 +39,19 @@ def test_intraday_quote_endpoint_returns_latest_trade():
         "quoted_at": "2026-08-02T01:00:00Z",
         "source": "Fugle MarketData",
     }
+
+
+def test_market_buy_endpoint_uses_provider_price(db):
+    api = FastAPI()
+    api.include_router(routes.router)
+    api.dependency_overrides[get_db] = lambda: db
+    api.dependency_overrides[routes.get_intraday_market_data_provider] = FakeIntradayProvider
+
+    response = TestClient(api).post(
+        "/api/v1/trades/buy-market",
+        json={"symbol": "2330", "quantity": 2, "stop_price": 900},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["price"] == "1025.0000"
+    assert response.json()["quantity"] == 2
