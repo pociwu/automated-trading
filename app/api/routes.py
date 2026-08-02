@@ -7,6 +7,7 @@ from app.models.entities import Holding, LimitOrder, OrderStatus, Trade
 from app.schemas.trading import (
     BuyRequest,
     DashboardRead,
+    IntradayQuoteRead,
     LimitOrderCreate,
     LimitOrderRead,
     MarketQuoteRead,
@@ -18,13 +19,21 @@ from app.schemas.trading import (
     StrategySellRequest,
     TradeRead,
 )
-from app.services.market_data import MarketDataError, TwseMarketDataProvider
+from app.services.market_data import (
+    FugleIntradayMarketDataProvider,
+    MarketDataError,
+    TwseMarketDataProvider,
+)
 from app.services.market_data_health import MarketDataHealthService
 from app.services.orders import OrderService
 from app.services.trading import TradingService
 
 
 router = APIRouter(prefix="/api/v1")
+
+
+def get_intraday_market_data_provider() -> FugleIntradayMarketDataProvider:
+    return FugleIntradayMarketDataProvider()
 
 
 @router.get("/health")
@@ -111,6 +120,17 @@ def update_close(payload: PriceUpdateRequest, db: Session = Depends(get_db)) -> 
 def market_quote(symbol: str) -> MarketQuoteRead:
     try:
         return TwseMarketDataProvider().get_close(symbol)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/market-data/intraday/{symbol}", response_model=IntradayQuoteRead)
+def intraday_market_quote(
+    symbol: str,
+    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+) -> IntradayQuoteRead:
+    try:
+        return provider.get_quote(symbol)
     except MarketDataError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

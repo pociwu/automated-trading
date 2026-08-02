@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     market_data_timeout_seconds: float = 15.0
     market_data_stale_after_seconds: float = 10.0
     fugle_api_key: str = ""
+    fugle_rest_url: str = "https://api.fugle.tw/marketdata/v1.0/stock"
     fugle_websocket_url: str = "wss://api.fugle.tw/marketdata/v1.0/stock/streaming"
     fugle_max_subscriptions: int = 5
 

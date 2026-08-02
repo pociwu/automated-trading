@@ -116,6 +116,16 @@ class MarketQuoteRead(BaseModel):
     source: str
 
 
+class IntradayQuoteRead(BaseModel):
+    symbol: str
+    name: str
+    price: Decimal
+    bid: Decimal | None
+    ask: Decimal | None
+    quoted_at: datetime
+    source: str
+
+
 class LimitOrderCreate(BaseModel):
     symbol: str = Field(min_length=1, max_length=20)
     name: str = Field(default="", max_length=80)

@@ -110,13 +110,45 @@ with tab_orders:
                 st.rerun()
 
 with tab_buy:
+    quote_col, refresh_col = st.columns([3, 1])
+    quote_symbol = quote_col.text_input(
+        "即時行情股票代號",
+        placeholder="2330",
+        key="buy_quote_symbol",
+    ).strip().upper()
+    if refresh_col.button("查詢／更新即時股價", type="primary", use_container_width=True):
+        if not quote_symbol:
+            st.error("請先輸入股票代號")
+        else:
+            quote = api("GET", f"/market-data/intraday/{quote_symbol}")
+            if quote:
+                st.session_state["buy_intraday_quote"] = quote
+
+    quote = st.session_state.get("buy_intraday_quote")
+    if quote and quote.get("symbol") == quote_symbol:
+        quote_metrics = st.columns(4)
+        quote_metrics[0].metric("最新成交價", f'NT$ {float(quote["price"]):,.2f}')
+        quote_metrics[1].metric("委買價", f'NT$ {float(quote["bid"]):,.2f}' if quote.get("bid") else "—")
+        quote_metrics[2].metric("委賣價", f'NT$ {float(quote["ask"]):,.2f}' if quote.get("ask") else "—")
+        quote_metrics[3].metric("股票名稱", quote.get("name") or "—")
+        st.caption(f'行情時間：{quote["quoted_at"]}｜來源：{quote["source"]}')
+
     with st.form("buy_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        symbol = c1.text_input("股票代號", placeholder="2330")
-        name = c2.text_input("股票名稱", placeholder="台積電")
+        symbol = c1.text_input("股票代號", value=quote_symbol, disabled=True)
+        name = c2.text_input(
+            "股票名稱",
+            value=quote.get("name", "") if quote and quote.get("symbol") == quote_symbol else "",
+            placeholder="台積電",
+        )
         c4, c5, c6 = st.columns(3)
         quantity = c4.number_input("股數", min_value=1, step=1)
-        price = c5.number_input("成交價", min_value=0.01, step=0.5)
+        suggested_price = (
+            float(quote["price"])
+            if quote and quote.get("symbol") == quote_symbol
+            else 0.01
+        )
+        price = c5.number_input("成交價", min_value=0.01, value=suggested_price, step=0.5)
         stop = c6.number_input("S 點停損價（0 表示未設定）", min_value=0.0, step=0.5)
         if st.form_submit_button("確認模擬買進", type="primary"):
             result = api("POST", "/trades/buy", json={
@@ -208,4 +240,3 @@ with tab_history:
         st.dataframe(trade_frame.drop(columns=["id"]), use_container_width=True, hide_index=True)
     else:
         st.info("尚無交易紀錄。")
-
