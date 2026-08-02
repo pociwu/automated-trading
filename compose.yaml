@@ -1,0 +1,81 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trading}
+      POSTGRES_USER: ${POSTGRES_USER:-trading}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TZ: Asia/Taipei
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-trading}
+      TZ: Asia/Taipei
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_NAME: 自動化交易（模擬模式）
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-trading}
+      INITIAL_CAPITAL: ${INITIAL_CAPITAL:-2000000}
+      TWSE_API_URL: https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL
+      MARKET_DATA_TIMEOUT_SECONDS: 15
+      MARKET_DATA_STALE_AFTER_SECONDS: ${MARKET_DATA_STALE_AFTER_SECONDS:-10}
+      FUGLE_MAX_SUBSCRIPTIONS: ${FUGLE_MAX_SUBSCRIPTIONS:-5}
+      TZ: Asia/Taipei
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    restart: unless-stopped
+    command: ["streamlit", "run", "streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]
+    environment:
+      API_BASE_URL: http://api:8000
+      TZ: Asia/Taipei
+    ports:
+      - "7788:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  matcher:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.market_stream"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-trading}
+      FUGLE_API_KEY: ${FUGLE_API_KEY:?Set FUGLE_API_KEY in .env}
+      FUGLE_WEBSOCKET_URL: wss://api.fugle.tw/marketdata/v1.0/stock/streaming
+      FUGLE_MAX_SUBSCRIPTIONS: ${FUGLE_MAX_SUBSCRIPTIONS:-5}
+      MARKET_DATA_STALE_AFTER_SECONDS: ${MARKET_DATA_STALE_AFTER_SECONDS:-10}
+      TZ: Asia/Taipei
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
