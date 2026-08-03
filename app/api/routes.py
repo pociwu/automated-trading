@@ -15,6 +15,7 @@ from app.schemas.trading import (
     MarketSellRequest,
     MarketStrategySellRequest,
     MarketDataHealthRead,
+    PriceLimitsRead,
     PriceUpdateRequest,
     PriceUpdateResult,
     SellRequest,
@@ -28,6 +29,7 @@ from app.services.market_data import (
     TwseMarketDataProvider,
 )
 from app.services.market_data_health import MarketDataHealthService
+from app.services.limit_order_placement import LimitOrderPlacementService
 from app.services.market_orders import MarketOrderService
 from app.services.orders import OrderService
 from app.services.trading import TradingService
@@ -107,8 +109,15 @@ def sell_424_market(
 
 
 @router.post("/orders", response_model=LimitOrderRead, status_code=201)
-def place_order(payload: LimitOrderCreate, db: Session = Depends(get_db)) -> LimitOrder:
-    return OrderService(db).place(payload)
+def place_order(
+    payload: LimitOrderCreate,
+    db: Session = Depends(get_db),
+    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+) -> LimitOrder:
+    try:
+        return LimitOrderPlacementService(db, provider).place(payload)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/orders", response_model=list[LimitOrderRead])
@@ -171,6 +180,17 @@ def intraday_market_quote(
 ) -> IntradayQuoteRead:
     try:
         return provider.get_quote(symbol)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/market-data/intraday/{symbol}/limits", response_model=PriceLimitsRead)
+def intraday_price_limits(
+    symbol: str,
+    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+) -> PriceLimitsRead:
+    try:
+        return provider.get_price_limits(symbol)
     except MarketDataError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

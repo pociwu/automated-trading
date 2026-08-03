@@ -156,6 +156,13 @@ class IntradayQuoteRead(BaseModel):
     source: str
 
 
+class PriceLimitsRead(BaseModel):
+    symbol: str
+    reference_price: Decimal
+    limit_down_price: Decimal
+    limit_up_price: Decimal
+
+
 class LimitOrderCreate(BaseModel):
     symbol: str = Field(min_length=1, max_length=20)
     name: str = Field(default="", max_length=80)

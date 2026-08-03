@@ -53,3 +53,30 @@ def test_fugle_provider_parses_intraday_quote():
     assert quote.bid == Decimal("1020")
     assert quote.ask == Decimal("1025")
     assert quote.quoted_at.isoformat() == "2026-08-02T01:00:00+00:00"
+
+
+def test_fugle_provider_parses_official_daily_price_limits():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/intraday/ticker/2330")
+        assert request.headers["X-API-KEY"] == "test-key"
+        return httpx.Response(
+            200,
+            json={
+                "symbol": "2330",
+                "referencePrice": 1000,
+                "limitDownPrice": 900,
+                "limitUpPrice": 1100,
+            },
+        )
+
+    provider = FugleIntradayMarketDataProvider(
+        api_key="test-key",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    limits = provider.get_price_limits("2330")
+
+    assert limits.symbol == "2330"
+    assert limits.reference_price == Decimal("1000")
+    assert limits.limit_down_price == Decimal("900")
+    assert limits.limit_up_price == Decimal("1100")

@@ -43,6 +43,93 @@ def show_intraday_quote(quote: dict) -> None:
 
 
 @st.fragment(run_every=MARKET_QUOTE_REFRESH_INTERVAL)
+def render_limit_order(holdings: list[dict]) -> None:
+    side = st.radio(
+        "方向",
+        ["BUY", "SELL"],
+        horizontal=True,
+        format_func=lambda value: "買進" if value == "BUY" else "賣出",
+        key="limit_order_side",
+    )
+
+    if side == "SELL":
+        available = [row for row in holdings if int(row["available_quantity"]) > 0]
+        if not available:
+            st.info("目前沒有可掛賣單的持股，或持股已被其他委託保留。")
+            return
+        by_symbol = {row["symbol"]: row for row in available}
+        symbol = st.selectbox("股票代號", list(by_symbol), key="limit_order_sell_symbol")
+        max_quantity = int(by_symbol[symbol]["available_quantity"])
+    else:
+        symbol = st.text_input(
+            "股票代號",
+            placeholder="2330",
+            key="limit_order_buy_symbol",
+        ).strip().upper()
+        max_quantity = None
+
+    if not symbol:
+        st.info("輸入股票代號後，系統會自動將最新成交價帶入限價。")
+        return
+
+    quote = api("GET", f"/market-data/intraday/{symbol}")
+    if not quote:
+        st.warning("尚未取得有效行情，因此無法送出限價單。")
+        return
+    limits = api("GET", f"/market-data/intraday/{symbol}/limits")
+    if not limits:
+        st.warning("尚未取得官方漲跌停價格，因此無法送出限價單。")
+        return
+    show_intraday_quote(quote)
+
+    price_key = "limit_order_price"
+    quote_marker = f"{side}:{symbol}"
+    if st.session_state.get("limit_order_quote_marker") != quote_marker:
+        st.session_state[price_key] = float(quote["price"])
+        st.session_state["limit_order_quote_marker"] = quote_marker
+    if st.button("以最新成交價更新限價", key="refresh_limit_order_price"):
+        st.session_state[price_key] = float(quote["price"])
+
+    limit_down = float(limits["limit_down_price"])
+    limit_up = float(limits["limit_up_price"])
+    reference = float(limits["reference_price"])
+    st.caption(
+        f"參考價 NT$ {reference:,.2f}｜跌停 NT$ {limit_down:,.2f}｜漲停 NT$ {limit_up:,.2f}。"
+        "最新成交價只在首次選擇股票或按上方按鈕時帶入；你仍可自行調整限價。"
+    )
+    with st.form("limit_order_form", clear_on_submit=True):
+        quantity = st.number_input(
+            "委託股數",
+            min_value=1,
+            max_value=max_quantity,
+            step=1,
+            key="limit_order_quantity",
+        )
+        limit_price = st.number_input(
+            "限價",
+            min_value=limit_down,
+            max_value=limit_up,
+            step=0.5,
+            key=price_key,
+        )
+        if st.form_submit_button("送出模擬限價單", type="primary"):
+            result = api(
+                "POST",
+                "/orders",
+                json={
+                    "symbol": symbol,
+                    "name": quote.get("name", ""),
+                    "side": side,
+                    "quantity": quantity,
+                    "limit_price": limit_price,
+                },
+            )
+            if result:
+                st.success("限價單已送出，等待盤中行情觸價。")
+                st.rerun()
+
+
+@st.fragment(run_every=MARKET_QUOTE_REFRESH_INTERVAL)
 def render_market_buy() -> None:
     symbol = st.text_input("股票代號", placeholder="2330", key="market_buy_symbol").strip().upper()
     if not symbol:
@@ -154,31 +241,7 @@ with tab_dashboard:
 with tab_orders:
     st.caption("買單：最新成交價 ≤ 限價時成交；賣單：最新成交價 ≥ 限價時成交。")
     holdings_for_order = dashboard.get("holdings", []) if dashboard else []
-    with st.form("limit_order_form", clear_on_submit=True):
-        side = st.radio("方向", ["BUY", "SELL"], horizontal=True, format_func=lambda x: "買進" if x == "BUY" else "賣出")
-        c1, c2 = st.columns(2)
-        if side == "SELL" and holdings_for_order:
-            symbol = c1.selectbox("股票代號", [row["symbol"] for row in holdings_for_order], key="order_symbol_sell")
-            selected_holding = next(row for row in holdings_for_order if row["symbol"] == symbol)
-            name = selected_holding["name"]
-            max_quantity = max(int(selected_holding["available_quantity"]), 1)
-        else:
-            symbol = c1.text_input("股票代號", placeholder="2330", key="order_symbol_buy")
-            name = c2.text_input("股票名稱", placeholder="台積電", key="order_name_buy")
-            max_quantity = None
-        quantity = st.number_input(
-            "委託股數", min_value=1, max_value=max_quantity, step=1, key="order_quantity"
-        )
-        limit_price = st.number_input("限價", min_value=0.01, step=0.5, key="order_limit_price")
-        if st.form_submit_button("送出模擬限價單", type="primary"):
-            if side == "SELL" and not holdings_for_order:
-                st.error("目前沒有可掛賣單的持股。")
-            elif api("POST", "/orders", json={
-                "symbol": symbol, "name": name, "side": side,
-                "quantity": quantity, "limit_price": limit_price,
-            }):
-                st.success("限價單已送出，等待盤中行情觸價。")
-                st.rerun()
+    render_limit_order(holdings_for_order)
 
     orders = api("GET", "/orders")
     if orders:

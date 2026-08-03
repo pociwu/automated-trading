@@ -6,7 +6,7 @@ from time import monotonic
 import httpx
 
 from app.core.config import get_settings
-from app.schemas.trading import IntradayQuoteRead, MarketQuoteRead
+from app.schemas.trading import IntradayQuoteRead, MarketQuoteRead, PriceLimitsRead
 
 
 class MarketDataError(RuntimeError):
@@ -63,6 +63,30 @@ class FugleIntradayMarketDataProvider:
             ask=self._optional_decimal(last_trade.get("ask")),
             quoted_at=quoted_at,
             source=self.source,
+        )
+
+    def get_price_limits(self, symbol: str) -> PriceLimitsRead:
+        normalized = symbol.strip().upper()
+        if not normalized:
+            raise MarketDataError("股票代號不可空白")
+        if not self.api_key:
+            raise MarketDataError("FUGLE_API_KEY 尚未設定")
+        try:
+            response = self.client.get(
+                f"{self.url}/intraday/ticker/{normalized}",
+                headers={"Accept": "application/json", "X-API-KEY": self.api_key},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise MarketDataError(f"無法取得 {normalized} 漲跌停價格") from exc
+        if not isinstance(payload, dict):
+            raise MarketDataError("Fugle 股票基本資料格式不正確")
+        return PriceLimitsRead(
+            symbol=str(payload.get("symbol") or normalized).strip().upper(),
+            reference_price=self._decimal(payload.get("referencePrice"), "參考價"),
+            limit_down_price=self._decimal(payload.get("limitDownPrice"), "跌停價"),
+            limit_up_price=self._decimal(payload.get("limitUpPrice"), "漲停價"),
         )
 
     @staticmethod
