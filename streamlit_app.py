@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 from html import escape
 import os
+from urllib.parse import quote as url_quote
 
 import pandas as pd
 import requests
@@ -13,6 +14,14 @@ refresh_setting = os.getenv("MARKET_QUOTE_REFRESH_INTERVAL", "5s").strip().lower
 MARKET_QUOTE_REFRESH_INTERVAL = None if refresh_setting == "off" else refresh_setting
 
 st.set_page_config(page_title="模擬程式交易", page_icon="📈", layout="wide")
+
+requested_order_symbol = str(st.query_params.get("order_symbol", "")).strip().upper()
+if requested_order_symbol:
+    st.session_state["limit_order_buy_symbol"] = requested_order_symbol
+    st.session_state["main_tab_default"] = "盤中限價單"
+    st.session_state["main_tabs_version"] = st.session_state.get("main_tabs_version", 0) + 1
+    st.query_params.clear()
+
 st.title("模擬程式交易")
 st.caption("手動交易 · 4:2:4 部位管理 · S 點停損")
 
@@ -50,10 +59,11 @@ def watchlist_board_html(rows: list[dict]) -> str:
     for row in rows:
         name = escape(row.get("name") or row["symbol"])
         symbol = escape(row["symbol"])
+        order_url = f"?order_symbol={url_quote(row['symbol'])}"
         if row.get("price") is None or row.get("reference_price") is None:
             rendered_rows.append(
-                f'<div class="watch-row unavailable"><div><strong>{name}</strong>'
-                f'<small>{symbol}</small></div><div>—</div><div>—</div><div>—</div></div>'
+                f'<a class="watch-row unavailable" href="{order_url}" target="_self"><div><strong>{name}</strong>'
+                f'<small>{symbol}・點選下單</small></div><div>—</div><div>—</div><div>—</div></a>'
             )
             continue
         price = Decimal(str(row["price"]))
@@ -62,8 +72,9 @@ def watchlist_board_html(rows: list[dict]) -> str:
         change_rate = change / reference * Decimal("100")
         direction = "up" if change > 0 else "down" if change < 0 else "flat"
         rendered_rows.append(
-            f'<div class="watch-row {direction}"><div><strong>{name}</strong><small>{symbol}</small></div>'
-            f'<div>{price:,.2f}</div><div>{change:+,.2f}</div><div>{change_rate:+.2f}%</div></div>'
+            f'<a class="watch-row {direction}" href="{order_url}" target="_self"><div><strong>{name}</strong>'
+            f'<small>{symbol}・點選下單</small></div><div>{price:,.2f}</div><div>{change:+,.2f}</div>'
+            f'<div>{change_rate:+.2f}%</div></a>'
         )
     body = "".join(rendered_rows) or '<div class="watch-empty">尚未加入觀察股票</div>'
     return f"""
@@ -74,7 +85,9 @@ def watchlist_board_html(rows: list[dict]) -> str:
       .watch-head,.watch-row {{display:grid;grid-template-columns:minmax(130px,1.35fr) repeat(3,minmax(92px,1fr));
         align-items:center;gap:12px;padding:12px 20px}}
       .watch-head {{background:linear-gradient(#22252a,#111);color:#d8d8d8;font-weight:700;border-bottom:1px solid #31343a}}
-      .watch-row {{min-height:68px;border-bottom:1px solid #24272b;font-size:1.2rem;font-weight:750}}
+      .watch-row {{min-height:68px;border-bottom:1px solid #24272b;font-size:1.2rem;font-weight:750;
+        text-decoration:none;color:inherit;transition:background .15s ease,transform .15s ease}}
+      .watch-row:hover {{background:#15181c;transform:translateX(2px)}}
       .watch-row:last-child {{border-bottom:0}}
       .watch-row>div:not(:first-child),.watch-head>div:not(:first-child) {{text-align:right}}
       .watch-row strong {{display:block;color:#f4f4f4;font-size:1.08rem}}
@@ -113,7 +126,7 @@ def render_watchlist() -> None:
             }
         )
     st.markdown(watchlist_board_html(rows), unsafe_allow_html=True)
-    st.caption("紅色為上漲、綠色為下跌；漲跌與幅度以當日參考價計算，每 5 秒更新。")
+    st.caption("點選股票可帶入盤中限價單。紅色為上漲、綠色為下跌；漲跌與幅度以當日參考價計算，每 5 秒更新。")
 
     with st.expander("管理觀察清單", expanded=not items):
         with st.form("watchlist_add_form", clear_on_submit=True):
@@ -309,8 +322,11 @@ if dashboard:
     if float(dashboard["reserved_cash"]) > 0:
         st.caption(f'掛單凍結現金：NT$ {float(dashboard["reserved_cash"]):,.2f}')
 
+main_tab_names = ["觀察清單", "持股總覽", "盤中限價單", "立即買進", "收盤價 / S 點", "賣出", "交易紀錄"]
 tab_watchlist, tab_dashboard, tab_orders, tab_buy, tab_prices, tab_sell, tab_history = st.tabs(
-    ["觀察清單", "持股總覽", "盤中限價單", "立即買進", "收盤價 / S 點", "賣出", "交易紀錄"]
+    main_tab_names,
+    default=st.session_state.get("main_tab_default", "觀察清單"),
+    key=f'main_tabs_{st.session_state.get("main_tabs_version", 0)}',
 )
 
 with tab_watchlist:

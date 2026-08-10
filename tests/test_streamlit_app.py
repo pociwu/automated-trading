@@ -123,3 +123,58 @@ def test_watchlist_renders_taiwan_red_up_market_board(monkeypatch):
     assert "+25.00" in board
     assert "+2.50%" in board
     assert "watch-row up" in board
+    assert '?order_symbol=2330' in board
+
+
+def test_watchlist_selection_prefills_limit_order_and_opens_order_tab(monkeypatch):
+    def fake_request(method: str, url: str, **kwargs):
+        if url.endswith("/dashboard"):
+            return FakeResponse(
+                {
+                    "initial_capital": "2000000.00",
+                    "cash": "2000000.00",
+                    "reserved_cash": "0.00",
+                    "available_cash": "2000000.00",
+                    "holdings_cost": "0.00",
+                    "market_value": "0.00",
+                    "total_assets": "2000000.00",
+                    "total_pnl": "0.00",
+                    "return_rate": "0.00",
+                    "holdings": [],
+                }
+            )
+        if url.endswith("/market-data/intraday/2330"):
+            return FakeResponse(
+                {
+                    "symbol": "2330",
+                    "name": "台積電",
+                    "price": "1025",
+                    "bid": "1020",
+                    "ask": "1025",
+                    "quoted_at": "2026-08-10T01:00:00Z",
+                    "source": "Fugle MarketData",
+                }
+            )
+        if url.endswith("/market-data/intraday/2330/limits"):
+            return FakeResponse(
+                {
+                    "symbol": "2330",
+                    "reference_price": "1000",
+                    "limit_down_price": "900",
+                    "limit_up_price": "1100",
+                }
+            )
+        return FakeResponse([])
+
+    monkeypatch.setenv("MARKET_QUOTE_REFRESH_INTERVAL", "off")
+    monkeypatch.setattr("requests.request", fake_request)
+    app_path = Path(__file__).parents[1] / "streamlit_app.py"
+    app = AppTest.from_file(app_path, default_timeout=20)
+    app.query_params["order_symbol"] = "2330"
+
+    app.run()
+
+    assert not app.exception
+    assert app.text_input(key="limit_order_buy_symbol").value == "2330"
+    assert app.number_input(key="limit_order_price").value == 1025.0
+    assert app.tabs[2].label == "盤中限價單"
