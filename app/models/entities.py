@@ -40,6 +40,17 @@ class Account(Base):
     holdings: Mapped[list["Holding"]] = relationship(back_populates="account")
 
 
+class WatchlistItem(Base):
+    __tablename__ = "watchlist_items"
+    __table_args__ = (UniqueConstraint("account_id", "symbol"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    name: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class Holding(Base):
     __tablename__ = "holdings"
     __table_args__ = (UniqueConstraint("account_id", "symbol"),)

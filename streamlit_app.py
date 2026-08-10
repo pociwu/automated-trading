@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from html import escape
 import os
 
 import pandas as pd
@@ -20,6 +21,8 @@ def api(method: str, path: str, **kwargs):
     try:
         response = requests.request(method, f"{API_URL}{path}", timeout=10, **kwargs)
         response.raise_for_status()
+        if response.status_code == 204:
+            return {}
         return response.json()
     except requests.RequestException as exc:
         detail = ""
@@ -40,6 +43,92 @@ def show_intraday_quote(quote: dict) -> None:
     metrics[3].metric("股票名稱", quote.get("name") or "—")
     quoted_at = pd.Timestamp(quote["quoted_at"]).tz_convert("Asia/Taipei").strftime("%Y-%m-%d %H:%M:%S")
     st.caption(f'行情時間：{quoted_at}｜來源：{quote["source"]}｜每 5 秒更新')
+
+
+def watchlist_board_html(rows: list[dict]) -> str:
+    rendered_rows = []
+    for row in rows:
+        name = escape(row.get("name") or row["symbol"])
+        symbol = escape(row["symbol"])
+        if row.get("price") is None or row.get("reference_price") is None:
+            rendered_rows.append(
+                f'<div class="watch-row unavailable"><div><strong>{name}</strong>'
+                f'<small>{symbol}</small></div><div>—</div><div>—</div><div>—</div></div>'
+            )
+            continue
+        price = Decimal(str(row["price"]))
+        reference = Decimal(str(row["reference_price"]))
+        change = price - reference
+        change_rate = change / reference * Decimal("100")
+        direction = "up" if change > 0 else "down" if change < 0 else "flat"
+        rendered_rows.append(
+            f'<div class="watch-row {direction}"><div><strong>{name}</strong><small>{symbol}</small></div>'
+            f'<div>{price:,.2f}</div><div>{change:+,.2f}</div><div>{change_rate:+.2f}%</div></div>'
+        )
+    body = "".join(rendered_rows) or '<div class="watch-empty">尚未加入觀察股票</div>'
+    return f"""
+    <style>
+      .watchlist-board {{background:#050505;border:1px solid #292d33;border-radius:14px;overflow:hidden;
+        color:#f5f5f5;font-variant-numeric:tabular-nums;box-shadow:0 12px 30px rgba(0,0,0,.28)}}
+      .watch-title {{padding:18px 20px 12px;font-size:1.35rem;font-weight:800;background:#1c1f23}}
+      .watch-head,.watch-row {{display:grid;grid-template-columns:minmax(130px,1.35fr) repeat(3,minmax(92px,1fr));
+        align-items:center;gap:12px;padding:12px 20px}}
+      .watch-head {{background:linear-gradient(#22252a,#111);color:#d8d8d8;font-weight:700;border-bottom:1px solid #31343a}}
+      .watch-row {{min-height:68px;border-bottom:1px solid #24272b;font-size:1.2rem;font-weight:750}}
+      .watch-row:last-child {{border-bottom:0}}
+      .watch-row>div:not(:first-child),.watch-head>div:not(:first-child) {{text-align:right}}
+      .watch-row strong {{display:block;color:#f4f4f4;font-size:1.08rem}}
+      .watch-row small {{display:block;color:#858b93;font-size:.72rem;margin-top:3px;font-weight:500}}
+      .watch-row.up>div:not(:first-child) {{color:#ff2d3f}}
+      .watch-row.down>div:not(:first-child) {{color:#00e56b}}
+      .watch-row.flat>div:not(:first-child) {{color:#f2f2f2}}
+      .watch-row.unavailable>div:not(:first-child) {{color:#7d828a}}
+      .watch-empty {{padding:34px;text-align:center;color:#868b92}}
+      @media(max-width:700px) {{
+        .watch-head,.watch-row {{grid-template-columns:minmax(90px,1.25fr) repeat(3,minmax(64px,1fr));gap:6px;padding:10px 12px}}
+        .watch-head {{font-size:.8rem}} .watch-row {{font-size:.92rem;min-height:60px}}
+      }}
+    </style>
+    <div class="watchlist-board">
+      <div class="watch-title">自選觀察</div>
+      <div class="watch-head"><div>商品</div><div>成交</div><div>漲跌</div><div>幅度</div></div>
+      {body}
+    </div>
+    """
+
+
+@st.fragment(run_every=MARKET_QUOTE_REFRESH_INTERVAL)
+def render_watchlist() -> None:
+    items = api("GET", "/watchlist") or []
+    rows = []
+    for item in items:
+        quote = api("GET", f'/market-data/intraday/{item["symbol"]}')
+        limits = api("GET", f'/market-data/intraday/{item["symbol"]}/limits')
+        rows.append(
+            {
+                **item,
+                "name": (quote or {}).get("name") or item.get("name"),
+                "price": (quote or {}).get("price"),
+                "reference_price": (limits or {}).get("reference_price"),
+            }
+        )
+    st.markdown(watchlist_board_html(rows), unsafe_allow_html=True)
+    st.caption("紅色為上漲、綠色為下跌；漲跌與幅度以當日參考價計算，每 5 秒更新。")
+
+    with st.expander("管理觀察清單", expanded=not items):
+        with st.form("watchlist_add_form", clear_on_submit=True):
+            symbol = st.text_input("股票代號", placeholder="例如 2330", key="watchlist_symbol").strip().upper()
+            if st.form_submit_button("加入觀察", type="primary") and symbol:
+                if api("POST", "/watchlist", json={"symbol": symbol}):
+                    st.success(f"已將 {symbol} 加入觀察清單")
+                    st.rerun()
+        if items:
+            labels = {f'{item["symbol"]} {item.get("name", "")}': item["symbol"] for item in items}
+            selected = st.selectbox("移除股票", list(labels), key="watchlist_remove_symbol")
+            if st.button("移除觀察", key="watchlist_remove_button"):
+                if api("DELETE", f"/watchlist/{labels[selected]}") is not None:
+                    st.success("已從觀察清單移除")
+                    st.rerun()
 
 
 @st.fragment(run_every=MARKET_QUOTE_REFRESH_INTERVAL)
@@ -220,9 +309,12 @@ if dashboard:
     if float(dashboard["reserved_cash"]) > 0:
         st.caption(f'掛單凍結現金：NT$ {float(dashboard["reserved_cash"]):,.2f}')
 
-tab_dashboard, tab_orders, tab_buy, tab_prices, tab_sell, tab_history = st.tabs(
-    ["持股總覽", "盤中限價單", "立即買進", "收盤價 / S 點", "賣出", "交易紀錄"]
+tab_watchlist, tab_dashboard, tab_orders, tab_buy, tab_prices, tab_sell, tab_history = st.tabs(
+    ["觀察清單", "持股總覽", "盤中限價單", "立即買進", "收盤價 / S 點", "賣出", "交易紀錄"]
 )
+
+with tab_watchlist:
+    render_watchlist()
 
 with tab_dashboard:
     if dashboard and dashboard["holdings"]:

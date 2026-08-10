@@ -163,6 +163,24 @@ class PriceLimitsRead(BaseModel):
     limit_up_price: Decimal
 
 
+class WatchlistCreate(BaseModel):
+    symbol: str = Field(min_length=1, max_length=20)
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        return value.strip().upper()
+
+
+class WatchlistItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    symbol: str
+    name: str
+    created_at: datetime
+
+
 class LimitOrderCreate(BaseModel):
     symbol: str = Field(min_length=1, max_length=20)
     name: str = Field(default="", max_length=80)

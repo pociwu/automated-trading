@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.entities import Holding, LimitOrder, OrderStatus, Trade
+from app.models.entities import Holding, LimitOrder, OrderStatus, Trade, WatchlistItem
 from app.schemas.trading import (
     BuyRequest,
     DashboardRead,
@@ -22,6 +22,8 @@ from app.schemas.trading import (
     StopPriceRequest,
     StrategySellRequest,
     TradeRead,
+    WatchlistCreate,
+    WatchlistItemRead,
 )
 from app.services.market_data import (
     FugleIntradayMarketDataProvider,
@@ -33,6 +35,7 @@ from app.services.limit_order_placement import LimitOrderPlacementService
 from app.services.market_orders import MarketOrderService
 from app.services.orders import OrderService
 from app.services.trading import TradingService
+from app.services.watchlist import WatchlistService
 
 
 router = APIRouter(prefix="/api/v1")
@@ -45,6 +48,31 @@ def get_intraday_market_data_provider() -> FugleIntradayMarketDataProvider:
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/watchlist", response_model=list[WatchlistItemRead])
+def watchlist(db: Session = Depends(get_db)) -> list[WatchlistItem]:
+    return WatchlistService(db).list_items()
+
+
+@router.post("/watchlist", response_model=WatchlistItemRead, status_code=201)
+def add_watchlist_item(
+    payload: WatchlistCreate,
+    db: Session = Depends(get_db),
+    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+) -> WatchlistItem:
+    try:
+        quote = provider.get_quote(payload.symbol)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if quote.symbol != payload.symbol:
+        raise HTTPException(status_code=502, detail="行情股票代號不符")
+    return WatchlistService(db).add(quote.symbol, quote.name)
+
+
+@router.delete("/watchlist/{symbol}", status_code=204)
+def remove_watchlist_item(symbol: str, db: Session = Depends(get_db)) -> None:
+    WatchlistService(db).remove(symbol)
 
 
 @router.get("/health/market-data", response_model=MarketDataHealthRead)

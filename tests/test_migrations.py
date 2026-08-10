@@ -21,5 +21,6 @@ def test_alembic_upgrades_empty_database_to_complete_schema(tmp_path: Path):
         "market_data_status",
         "price_history",
         "trades",
+        "watchlist_items",
     }
     command.check(config)
