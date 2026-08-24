@@ -246,6 +246,8 @@ def test_personal_assets_show_category_summary_below_total(monkeypatch):
 
 
 def test_stock_opening_symbol_prefills_name_and_uses_share_quantity(monkeypatch):
+    submitted = []
+
     def fake_request(method: str, url: str, **kwargs):
         if "personal-assets/dashboard" in url:
             return FakeResponse(
@@ -281,6 +283,9 @@ def test_stock_opening_symbol_prefills_name_and_uses_share_quantity(monkeypatch)
                     "source": "TWSE OpenAPI",
                 }
             )
+        if method == "POST" and url.endswith("/personal-assets/opening"):
+            submitted.append(kwargs["json"])
+            return FakeResponse({"id": 1})
         if url.endswith("/dashboard"):
             return FakeResponse(
                 {
@@ -305,7 +310,93 @@ def test_stock_opening_symbol_prefills_name_and_uses_share_quantity(monkeypatch)
 
     app.text_input(key="personal_opening_symbol").set_value("4916").run()
 
+    app.number_input(key="personal_opening_quantity").set_value(100).run()
+    app.number_input(key="personal_opening_cost").set_value(45.5).run()
+    next(button for button in app.button if button.label == "建立期初部位").click().run()
+
     assert not app.exception
-    assert app.text_input(key="personal_opening_name").value == "事欣科"
-    assert app.number_input(key="personal_opening_quantity").label == "目前股數（1 張＝1,000 股）"
-    assert app.number_input(key="personal_opening_quantity").value == 1
+    assert submitted[0]["name"] == "事欣科"
+    assert submitted[0]["quantity"] == 100
+    assert submitted[0]["total_cost"] == 4550.0
+
+
+def test_stock_opening_can_be_deleted_from_opening_tab(monkeypatch):
+    reversed_urls = []
+    position = {
+        "id": 4,
+        "account_id": 1,
+        "account_name": "個人台股",
+        "institution": "富邦證券",
+        "asset_type": "STOCK",
+        "symbol": "4916",
+        "name": "事欣科",
+        "quantity": "100",
+        "total_cost": "4550",
+        "current_value": "5000",
+    }
+    opening = {
+        "id": 9,
+        "kind": "OPENING",
+        "source_position_id": None,
+        "target_position_id": 4,
+        "quantity": "100",
+        "gross_amount": "4550",
+        "fees": "0",
+        "net_amount": "4550",
+        "cost_basis": "4550",
+        "realized_pnl": "0",
+        "occurred_at": "2026-08-20T01:00:00",
+        "note": "",
+        "reversal_of_id": None,
+        "reversed_at": None,
+    }
+
+    def fake_request(method: str, url: str, **kwargs):
+        if "personal-assets/dashboard" in url:
+            return FakeResponse(
+                {
+                    "total_value": "5000.00",
+                    "total_basis": "4550.00",
+                    "estimated_difference": "450.00",
+                    "stale_count": 0,
+                    "positions": [position],
+                    "snapshots": [],
+                    "has_backdated_changes": False,
+                }
+            )
+        if url.endswith("/personal-assets/accounts"):
+            return FakeResponse(
+                [{"id": 1, "name": "個人台股", "institution": "富邦證券", "asset_type": "STOCK", "currency": "TWD"}]
+            )
+        if "/personal-assets/transactions" in url and method == "GET":
+            return FakeResponse([opening])
+        if method == "POST" and url.endswith("/personal-assets/transactions/9/reverse"):
+            reversed_urls.append(url)
+            return FakeResponse({"id": 10, "kind": "REVERSAL"}, status_code=201)
+        if url.endswith("/dashboard"):
+            return FakeResponse(
+                {
+                    "initial_capital": "2000000.00",
+                    "cash": "2000000.00",
+                    "reserved_cash": "0.00",
+                    "available_cash": "2000000.00",
+                    "holdings_cost": "0.00",
+                    "market_value": "0.00",
+                    "total_assets": "2000000.00",
+                    "total_pnl": "0.00",
+                    "return_rate": "0.00",
+                    "holdings": [],
+                }
+            )
+        return FakeResponse([])
+
+    monkeypatch.setenv("MARKET_QUOTE_REFRESH_INTERVAL", "off")
+    monkeypatch.setattr("requests.request", fake_request)
+    app_path = Path(__file__).parents[1] / "streamlit_app.py"
+    app = AppTest.from_file(app_path, default_timeout=20).run()
+
+    app.checkbox(key="confirm_delete_stock_opening").check().run()
+    next(button for button in app.button if button.label == "刪除期初資料").click().run()
+
+    assert not app.exception
+    assert reversed_urls and reversed_urls[0].endswith("/personal-assets/transactions/9/reverse")

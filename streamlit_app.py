@@ -506,7 +506,10 @@ def render_personal_assets() -> None:
                         "GOLD": "黃金持有部位（g）",
                         "STOCK": "目前股數（1 張＝1,000 股）",
                     }.get(selected_type, "目前數量")
-                    cost_label = "每公克單位成本" if selected_type == "GOLD" else "總取得成本／累計保費"
+                    cost_label = {
+                        "GOLD": "每公克單位成本",
+                        "STOCK": "每股買進價格",
+                    }.get(selected_type, "總取得成本／累計保費")
                     value_label = "目前總現值（可填 0）" if selected_type == "GOLD" else "目前總現值"
                     if selected_type == "STOCK":
                         opening_quantity = o3.number_input(
@@ -524,7 +527,13 @@ def render_personal_assets() -> None:
                             format="%.2f" if selected_type == "GOLD" else "%.8f",
                             key="personal_opening_quantity",
                         )
-                    opening_cost = o4.number_input(cost_label, min_value=0.0, step=100.0 if selected_type == "GOLD" else 1000.0)
+                    opening_cost = o4.number_input(
+                        cost_label,
+                        min_value=0.0,
+                        step=0.01 if selected_type == "STOCK" else (100.0 if selected_type == "GOLD" else 1000.0),
+                        format="%.2f",
+                        key="personal_opening_cost",
+                    )
                     opening_value = o5.number_input(value_label, min_value=0.0, step=1000.0)
                     o6, o7 = st.columns(2)
                     opening_date_label = "買入日期" if selected_type in {"GOLD", "STOCK"} else "估值／期初日期"
@@ -533,10 +542,14 @@ def render_personal_assets() -> None:
                     if selected_type == "GOLD":
                         st.caption("每一筆買進請依原始日期分開建立；同一黃金存摺會自動合併數量並計算加權平均成本。期初建檔只登記既有黃金，不會扣除任何銀行帳戶現金；現值在更新行情後依銀行買進價計算。")
                     elif selected_type == "STOCK":
-                        st.caption("多筆股票可逐筆建立；同一帳戶與股票代號會自動合併數量及取得成本，每筆日期仍保留在異動紀錄，且不會扣除銀行帳戶現金。")
+                        st.caption("總取得成本＝目前股數 × 每股買進價格。多筆股票可逐筆建立；同一帳戶與股票代號會自動合併數量及成本，每筆日期仍保留在異動紀錄，且不會扣除銀行帳戶現金。")
                     opening_note = st.text_input("備註", key="opening_note")
                     if st.form_submit_button("建立期初部位", type="primary"):
-                        total_cost = opening_quantity * opening_cost if selected_type == "GOLD" else opening_cost
+                        total_cost = (
+                            opening_quantity * opening_cost
+                            if selected_type in {"GOLD", "STOCK"}
+                            else opening_cost
+                        )
                         payload = {
                             "account_id": selected_account["id"], "asset_type": selected_account["asset_type"],
                             "symbol": opening_symbol, "name": opening_name, "quantity": opening_quantity,
@@ -550,6 +563,74 @@ def render_personal_assets() -> None:
                         if api("POST", "/personal-assets/opening", json=payload):
                             st.success("期初資料已建立；相同商品已自動合併至既有部位")
                             st.rerun()
+
+                if selected_type == "STOCK":
+                    stock_positions = {
+                        row["id"]: row
+                        for row in positions
+                        if row["asset_type"] == "STOCK" and row["account_id"] == selected_account["id"]
+                    }
+                    all_transactions = api("GET", "/personal-assets/transactions?limit=200") or []
+                    stock_openings = []
+                    for transaction in all_transactions:
+                        position = stock_positions.get(transaction.get("target_position_id"))
+                        if (
+                            transaction["kind"] != "OPENING"
+                            or transaction["reversed_at"]
+                            or position is None
+                        ):
+                            continue
+                        has_later_change = any(
+                            later["id"] > transaction["id"]
+                            and later["kind"] != "REVERSAL"
+                            and not later["reversed_at"]
+                            and transaction["target_position_id"]
+                            in {later.get("source_position_id"), later.get("target_position_id")}
+                            for later in all_transactions
+                        )
+                        if not has_later_change:
+                            stock_openings.append((transaction, position))
+
+                    with st.expander("刪除錯誤的股票期初資料"):
+                        st.caption("刪除會以沖銷方式扣回該筆股數與成本並保留稽核紀錄，不會影響銀行現金。")
+                        if not stock_openings:
+                            st.info("目前沒有可直接刪除的股票期初資料；若已有後續異動，請先由最新一筆開始沖銷。")
+                        else:
+                            deletion_options = {}
+                            for transaction, position in stock_openings:
+                                quantity = float(transaction["quantity"])
+                                unit_price = float(transaction["cost_basis"]) / quantity
+                                occurred_at = pd.Timestamp(transaction["occurred_at"])
+                                label = (
+                                    f'#{transaction["id"]}｜{position["symbol"]} {position["name"]}'
+                                    f'｜{occurred_at.date()}｜{quantity:,.0f} 股 × NT$ {unit_price:,.2f}'
+                                )
+                                deletion_options[label] = transaction
+                            with st.form("delete_stock_opening_form"):
+                                deletion_label = st.selectbox(
+                                    "選擇錯誤資料",
+                                    list(deletion_options),
+                                    key="delete_stock_opening_id",
+                                )
+                                confirm_deletion = st.checkbox(
+                                    "確認刪除此筆股票期初資料",
+                                    key="confirm_delete_stock_opening",
+                                )
+                                if st.form_submit_button("刪除期初資料"):
+                                    if not confirm_deletion:
+                                        st.warning("請先勾選確認刪除。")
+                                    else:
+                                        transaction = deletion_options[deletion_label]
+                                        if api(
+                                            "POST",
+                                            f'/personal-assets/transactions/{transaction["id"]}/reverse',
+                                            json={
+                                                "occurred_at": pd.Timestamp.now(tz="Asia/Taipei").isoformat(),
+                                                "reason": "刪除錯誤的股票期初資料",
+                                            },
+                                        ):
+                                            st.success("股票期初資料已刪除並保留沖銷紀錄")
+                                            st.rerun()
 
         position_labels = {f'{row["id"]}｜{row["account_name"]}｜{row["symbol"]}｜{row["name"]}': row for row in positions}
         with management_tabs[2]:
