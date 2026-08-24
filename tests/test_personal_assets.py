@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.schemas.personal_assets import (
@@ -128,6 +128,65 @@ def test_dashboard_and_snapshot_keep_personal_assets_separate(db):
     assert gold.acquired_at == NOW.replace(tzinfo=None)
     assert cash.quantity == Decimal("1000.00000000")
     assert [row.kind for row in service.transactions()] == ["OPENING", "OPENING"]
+
+
+def test_multiple_opening_lots_are_aggregated_without_moving_cash(db):
+    service = PersonalAssetService(db)
+    bank = account(service, "銀行", PersonalAssetType.TWD)
+    gold_account = account(service, "黃金", PersonalAssetType.GOLD)
+    cash = opening(service, bank.id, PersonalAssetType.TWD, "TWD", "100000", "100000", "100000")
+
+    first = opening(service, gold_account.id, PersonalAssetType.GOLD, "BOT_GOLD_TWD", "10", "40000", "47000")
+    second = service.opening(
+        PersonalAssetOpeningCreate(
+            account_id=gold_account.id,
+            asset_type=PersonalAssetType.GOLD,
+            symbol="BOT_GOLD_TWD",
+            name="黃金存摺",
+            quantity=Decimal("5"),
+            total_cost=Decimal("22500"),
+            current_value=None,
+            occurred_at=NOW + timedelta(hours=1),
+        )
+    )
+
+    assert second.id == first.id
+    assert second.quantity == Decimal("15.00000000")
+    assert second.total_cost == Decimal("62500.00")
+    assert cash.quantity == Decimal("100000.00000000")
+    gold_openings = [
+        row
+        for row in service.transactions()
+        if row.kind == PersonalTransactionKind.OPENING.value and row.target_position_id == second.id
+    ]
+    assert len(gold_openings) == 2
+    assert {row.quantity for row in gold_openings} == {Decimal("10.00000000"), Decimal("5.00000000")}
+    assert {row.cost_basis for row in gold_openings} == {Decimal("40000.00"), Decimal("22500.00")}
+
+
+def test_latest_opening_lot_can_be_reversed_without_removing_earlier_lot(db):
+    service = PersonalAssetService(db)
+    broker = account(service, "券商", PersonalAssetType.STOCK)
+    stock = opening(service, broker.id, PersonalAssetType.STOCK, "2330", "10", "10000", "12000")
+    service.opening(
+        PersonalAssetOpeningCreate(
+            account_id=broker.id,
+            asset_type=PersonalAssetType.STOCK,
+            symbol="2330",
+            name="台積電",
+            quantity=Decimal("5"),
+            total_cost=Decimal("6000"),
+            current_value=Decimal("6500"),
+            occurred_at=NOW + timedelta(hours=1),
+        )
+    )
+    latest = service.transactions()[0]
+
+    service.reverse(latest.id, NOW + timedelta(hours=2), "第二筆期初資料輸入錯誤")
+
+    assert stock.active is True
+    assert stock.quantity == Decimal("10.00000000")
+    assert stock.total_cost == Decimal("10000.00")
 
 
 def test_opening_can_be_reversed_and_reentered(db):

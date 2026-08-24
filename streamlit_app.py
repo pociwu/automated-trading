@@ -346,6 +346,44 @@ def render_personal_assets() -> None:
     metrics[1].metric("資產比較基準", f'NT$ {float(dashboard_data["total_basis"]):,.2f}')
     metrics[2].metric("估計差額", f'NT$ {float(dashboard_data["estimated_difference"]):,.2f}')
     metrics[3].metric("過期估值", f'{dashboard_data["stale_count"]} 筆')
+
+    category_definitions = [
+        ("現金", {"TWD", "FX"}, False),
+        ("黃金", {"GOLD"}, True),
+        ("股票", {"STOCK"}, True),
+        ("加密貨幣", {"CRYPTO"}, True),
+        ("保單", {"INSURANCE"}, True),
+    ]
+    category_rows = []
+    for label, asset_types, show_performance in category_definitions:
+        category_positions = [
+            row for row in dashboard_data["positions"] if row["asset_type"] in asset_types
+        ]
+        current_value = sum(float(row["current_value"]) for row in category_positions)
+        invested_cost = sum(float(row["total_cost"]) for row in category_positions)
+        category_rows.append({
+            "資產類別": label,
+            "投入成本": invested_cost if show_performance else None,
+            "現值": current_value,
+            "投報率": (
+                (current_value - invested_cost) / invested_cost * 100
+                if show_performance and invested_cost
+                else None
+            ),
+        })
+    st.subheader("資產分類細項")
+    st.caption("現金包含新臺幣與外幣存款；投入成本與投報率僅適用於現金以外的資產。")
+    st.dataframe(
+        pd.DataFrame(category_rows),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "資產類別": st.column_config.TextColumn(width="medium"),
+            "投入成本": st.column_config.NumberColumn(format="NT$ %.2f"),
+            "現值": st.column_config.NumberColumn(format="NT$ %.2f"),
+            "投報率": st.column_config.NumberColumn(format="%.2f%%"),
+        },
+    )
     if dashboard_data["stale_count"]:
         st.warning("部分資產使用最後成功價格或過期人工估值，請查看明細中的行情時間。")
     if dashboard_data["has_backdated_changes"]:
@@ -446,7 +484,9 @@ def render_personal_assets() -> None:
                     opening_date = o6.date_input(opening_date_label, value=date.today())
                     policy_last4 = o7.text_input("保單末四碼（非保險可留空）", max_chars=4)
                     if selected_type == "GOLD":
-                        st.caption("總取得成本＝持有部位 × 每公克單位成本。期初建檔只登記既有黃金，不會扣除任何銀行帳戶現金；現值在更新行情後依臺銀本行買進價計算。")
+                        st.caption("每一筆買進請依原始日期分開建立；同一黃金存摺會自動合併數量並計算加權平均成本。期初建檔只登記既有黃金，不會扣除任何銀行帳戶現金；現值在更新行情後依銀行買進價計算。")
+                    elif selected_type == "STOCK":
+                        st.caption("多筆股票可逐筆建立；同一帳戶與股票代號會自動合併數量及取得成本，每筆日期仍保留在異動紀錄，且不會扣除銀行帳戶現金。")
                     opening_note = st.text_input("備註", key="opening_note")
                     if st.form_submit_button("建立期初部位", type="primary"):
                         total_cost = opening_quantity * opening_cost if selected_type == "GOLD" else opening_cost
@@ -461,7 +501,7 @@ def render_personal_assets() -> None:
                             "occurred_at": pd.Timestamp(opening_date, tz="Asia/Taipei").isoformat(), "note": opening_note,
                         }
                         if api("POST", "/personal-assets/opening", json=payload):
-                            st.success("期初部位已建立")
+                            st.success("期初資料已建立；相同商品已自動合併至既有部位")
                             st.rerun()
 
         position_labels = {f'{row["id"]}｜{row["account_name"]}｜{row["symbol"]}｜{row["name"]}': row for row in positions}

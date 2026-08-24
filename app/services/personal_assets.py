@@ -59,19 +59,28 @@ class PersonalAssetService:
                 PersonalAssetPosition.symbol == request.symbol,
             )
         )
-        if existing is not None and existing.active:
+        if existing is not None and existing.active and request.asset_type in {
+            PersonalAssetType.TWD,
+            PersonalAssetType.INSURANCE,
+        }:
             raise HTTPException(status_code=400, detail="此帳戶已有相同部位，請使用資產異動")
         current_price = self._opening_price(request)
         position = existing or PersonalAssetPosition(
             account_id=account.id, asset_type=request.asset_type.value, symbol=request.symbol
         )
-        position.name = request.name
-        position.quantity = quantity(request.quantity)
-        position.total_cost = money(request.total_cost)
-        position.current_price_twd = current_price
-        position.price_source = "期初手動估值" if current_price is not None else None
-        position.price_at = self._naive_utc(request.occurred_at) if current_price is not None else None
-        position.manual_price = current_price is not None
+        if request.name or existing is None:
+            position.name = request.name
+        if existing is not None and existing.active:
+            position.quantity = quantity(position.quantity + request.quantity)
+            position.total_cost = money(position.total_cost + request.total_cost)
+        else:
+            position.quantity = quantity(request.quantity)
+            position.total_cost = money(request.total_cost)
+        if current_price is not None:
+            position.current_price_twd = current_price
+            position.price_source = "期初手動估值"
+            position.price_at = self._naive_utc(request.occurred_at)
+            position.manual_price = True
         position.valuation_date = request.valuation_date
         position.policy_last4 = request.policy_last4
         position.policy_status = request.policy_status
@@ -86,11 +95,11 @@ class PersonalAssetService:
             PersonalAssetTransaction(
                 kind=PersonalTransactionKind.OPENING.value,
                 target_position_id=position.id,
-                quantity=position.quantity,
-                gross_amount=position.total_cost,
+                quantity=quantity(request.quantity),
+                gross_amount=money(request.total_cost),
                 fees=Decimal("0"),
-                net_amount=position.total_cost,
-                cost_basis=position.total_cost,
+                net_amount=money(request.total_cost),
+                cost_basis=money(request.total_cost),
                 realized_pnl=Decimal("0"),
                 occurred_at=self._naive_utc(request.occurred_at),
                 note=request.note,
@@ -214,7 +223,7 @@ class PersonalAssetService:
         if original.kind == PersonalTransactionKind.OPENING.value:
             linked = self.db.scalar(
                 select(PersonalAssetTransaction.id).where(
-                    PersonalAssetTransaction.id != original.id,
+                    PersonalAssetTransaction.id > original.id,
                     PersonalAssetTransaction.kind != PersonalTransactionKind.REVERSAL.value,
                     PersonalAssetTransaction.reversed_at.is_(None),
                     (PersonalAssetTransaction.source_position_id == original.target_position_id)
@@ -262,9 +271,9 @@ class PersonalAssetService:
         kind = PersonalTransactionKind(tx.kind)
         if kind == PersonalTransactionKind.OPENING:
             self._require_quantity(target, tx.quantity)
-            target.quantity = Decimal("0")
-            target.total_cost = Decimal("0")
-            target.active = False
+            target.quantity = quantity(target.quantity - tx.quantity)
+            target.total_cost = money(target.total_cost - tx.cost_basis)
+            target.active = target.quantity > 0
         elif kind == PersonalTransactionKind.BUY:
             self._require_quantity(target, tx.quantity)
             target.quantity = quantity(target.quantity - tx.quantity)
