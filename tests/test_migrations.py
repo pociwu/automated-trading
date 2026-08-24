@@ -22,5 +22,9 @@ def test_alembic_upgrades_empty_database_to_complete_schema(tmp_path: Path):
         "price_history",
         "trades",
         "watchlist_items",
+        "personal_asset_accounts",
+        "personal_asset_positions",
+        "personal_asset_transactions",
+        "personal_asset_snapshots",
     }
     command.check(config)

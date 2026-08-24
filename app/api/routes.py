@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +27,19 @@ from app.schemas.trading import (
     WatchlistCreate,
     WatchlistItemRead,
 )
+from app.schemas.personal_assets import (
+    ManualPriceUpdate,
+    PersonalAssetAccountCreate,
+    PersonalAssetAccountRead,
+    PersonalAssetDashboardRead,
+    PersonalAssetOpeningCreate,
+    PersonalAssetPositionRead,
+    PersonalAssetReversalCreate,
+    PersonalAssetSnapshotRead,
+    PersonalAssetTransactionCreate,
+    PersonalAssetTransactionRead,
+    QuoteRefreshRead,
+)
 from app.services.market_data import (
     FugleIntradayMarketDataProvider,
     MarketDataError,
@@ -36,6 +51,8 @@ from app.services.market_orders import MarketOrderService
 from app.services.orders import OrderService
 from app.services.trading import TradingService
 from app.services.watchlist import WatchlistService
+from app.services.personal_assets import PersonalAssetService
+from app.services.personal_asset_valuation import PersonalAssetValuationService
 
 
 router = APIRouter(prefix="/api/v1")
@@ -48,6 +65,77 @@ def get_intraday_market_data_provider() -> FugleIntradayMarketDataProvider:
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/personal-assets/accounts", response_model=list[PersonalAssetAccountRead])
+def personal_asset_accounts(db: Session = Depends(get_db)):
+    return PersonalAssetService(db).accounts()
+
+
+@router.post("/personal-assets/accounts", response_model=PersonalAssetAccountRead, status_code=201)
+def create_personal_asset_account(payload: PersonalAssetAccountCreate, db: Session = Depends(get_db)):
+    return PersonalAssetService(db).create_account(payload)
+
+
+@router.post("/personal-assets/opening", response_model=PersonalAssetPositionRead, status_code=201)
+def create_personal_asset_opening(payload: PersonalAssetOpeningCreate, db: Session = Depends(get_db)):
+    position = PersonalAssetService(db).opening(payload)
+    return next(row for row in PersonalAssetValuationService(db).position_reads() if row.id == position.id)
+
+
+@router.get("/personal-assets/dashboard", response_model=PersonalAssetDashboardRead)
+def personal_asset_dashboard(
+    days: int = Query(default=30, ge=0, le=3650),
+    db: Session = Depends(get_db),
+):
+    return PersonalAssetValuationService(db).dashboard(None if days == 0 else days)
+
+
+@router.post("/personal-assets/quotes/refresh", response_model=QuoteRefreshRead)
+def refresh_personal_asset_quotes(db: Session = Depends(get_db)) -> QuoteRefreshRead:
+    updated, stale = PersonalAssetValuationService(db).refresh()
+    return QuoteRefreshRead(updated=updated, stale_symbols=stale)
+
+
+@router.patch("/personal-assets/positions/{position_id}/price", response_model=PersonalAssetPositionRead)
+def update_personal_asset_manual_price(
+    position_id: int,
+    payload: ManualPriceUpdate,
+    db: Session = Depends(get_db),
+):
+    service = PersonalAssetValuationService(db)
+    try:
+        position = service.set_manual_price(position_id, payload.price_twd, payload.quoted_at)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="找不到資產部位") from exc
+    return next(row for row in service.position_reads() if row.id == position.id)
+
+
+@router.get("/personal-assets/transactions", response_model=list[PersonalAssetTransactionRead])
+def personal_asset_transactions(
+    limit: int = Query(default=500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+):
+    return PersonalAssetService(db).transactions(limit)
+
+
+@router.post("/personal-assets/transactions", response_model=PersonalAssetTransactionRead, status_code=201)
+def create_personal_asset_transaction(payload: PersonalAssetTransactionCreate, db: Session = Depends(get_db)):
+    return PersonalAssetService(db).transact(payload)
+
+
+@router.post("/personal-assets/transactions/{transaction_id}/reverse", response_model=PersonalAssetTransactionRead, status_code=201)
+def reverse_personal_asset_transaction(
+    transaction_id: int,
+    payload: PersonalAssetReversalCreate,
+    db: Session = Depends(get_db),
+):
+    return PersonalAssetService(db).reverse(transaction_id, payload.occurred_at, payload.reason)
+
+
+@router.post("/personal-assets/snapshots", response_model=PersonalAssetSnapshotRead, status_code=201)
+def create_personal_asset_snapshot(db: Session = Depends(get_db)):
+    return PersonalAssetValuationService(db).create_snapshot(datetime.now(UTC).replace(second=0, microsecond=0))
 
 
 @router.get("/watchlist", response_model=list[WatchlistItemRead])

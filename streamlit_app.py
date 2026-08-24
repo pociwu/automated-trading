@@ -307,23 +307,219 @@ def render_market_sell(holdings: list[dict]) -> None:
                 st.rerun()
 
 
-dashboard = api("GET", "/dashboard")
-if dashboard:
-    metrics = st.columns(5)
-    items = [
-        ("總資產", dashboard["total_assets"]),
-        ("可用現金", dashboard["available_cash"]),
-        ("持股市值", dashboard["market_value"]),
-        ("總損益", dashboard["total_pnl"]),
-        ("報酬率", f'{dashboard["return_rate"]}%'),
-    ]
-    for col, (label, value) in zip(metrics, items, strict=True):
-        col.metric(label, f"{float(value):,.2f}" if label != "報酬率" else value)
-    if float(dashboard["reserved_cash"]) > 0:
-        st.caption(f'掛單凍結現金：NT$ {float(dashboard["reserved_cash"]):,.2f}')
+ASSET_TYPE_LABELS = {
+    "STOCK": "個人台股",
+    "GOLD": "黃金存摺",
+    "INSURANCE": "保險",
+    "TWD": "新臺幣存款",
+    "FX": "外幣存款",
+    "CRYPTO": "加密貨幣",
+}
 
-main_tab_names = ["觀察清單", "持股總覽", "盤中限價單", "立即買進", "收盤價 / S 點", "賣出", "交易紀錄"]
-tab_watchlist, tab_dashboard, tab_orders, tab_buy, tab_prices, tab_sell, tab_history = st.tabs(
+
+def render_personal_assets() -> None:
+    period_labels = {"7 天": 7, "30 天": 30, "90 天": 90, "1 年": 365, "全部": 0}
+    c1, c2 = st.columns([3, 1])
+    period = c1.segmented_control("圖表期間", list(period_labels), default="30 天", key="personal_asset_period")
+    if c2.button("立即更新行情", type="primary", use_container_width=True):
+        refreshed = api("POST", "/personal-assets/quotes/refresh")
+        if refreshed is not None:
+            if refreshed["stale_symbols"]:
+                st.warning("部分行情更新失敗，已沿用最後成功價格。")
+            else:
+                st.success(f'已更新 {refreshed["updated"]} 筆行情')
+            st.rerun()
+
+    dashboard_data = api("GET", f'/personal-assets/dashboard?days={period_labels[period or "30 天"]}')
+    if not dashboard_data:
+        st.info("尚未建立個人資產資料，請由下方管理區先建立資產帳戶與期初部位。")
+        dashboard_data = {
+            "total_value": 0, "total_basis": 0, "estimated_difference": 0,
+            "stale_count": 0, "positions": [], "snapshots": [], "has_backdated_changes": False,
+        }
+
+    metrics = st.columns(4)
+    metrics[0].metric("個人資產總額", f'NT$ {float(dashboard_data["total_value"]):,.2f}')
+    metrics[1].metric("資產比較基準", f'NT$ {float(dashboard_data["total_basis"]):,.2f}')
+    metrics[2].metric("估計差額", f'NT$ {float(dashboard_data["estimated_difference"]):,.2f}')
+    metrics[3].metric("過期估值", f'{dashboard_data["stale_count"]} 筆')
+    if dashboard_data["stale_count"]:
+        st.warning("部分資產使用最後成功價格或過期人工估值，請查看明細中的行情時間。")
+    if dashboard_data["has_backdated_changes"]:
+        st.info("目前帳本存在事後補登；既有歷史快照不會回溯重算。")
+
+    snapshots = dashboard_data["snapshots"]
+    st.subheader("資產規模走勢")
+    st.caption("每日臺北時間 09:30、13:30 自動建立；此圖包含資金存取影響，不代表投資績效。")
+    if snapshots:
+        chart = pd.DataFrame(snapshots)
+        chart["scheduled_at"] = pd.to_datetime(chart["scheduled_at"], utc=True).dt.tz_convert("Asia/Taipei")
+        chart = chart.set_index("scheduled_at").rename(columns={
+            "total_value": "總資產", "stock_value": "台股", "gold_value": "黃金",
+            "insurance_value": "保險", "twd_value": "新臺幣", "fx_value": "外幣", "crypto_value": "加密貨幣",
+        })
+        st.line_chart(chart[["總資產", "台股", "黃金", "保險", "新臺幣", "外幣", "加密貨幣"]].astype(float))
+    else:
+        st.info("排程建立第一筆資產快照後，這裡會顯示折線圖。")
+
+    st.subheader("資產明細")
+    category_tabs = st.tabs(list(ASSET_TYPE_LABELS.values()))
+    for (asset_type, label), tab in zip(ASSET_TYPE_LABELS.items(), category_tabs, strict=True):
+        with tab:
+            rows = [row for row in dashboard_data["positions"] if row["asset_type"] == asset_type]
+            if not rows:
+                st.info(f"尚無{label}資料。")
+                continue
+            frame = pd.DataFrame(rows).rename(columns={
+                "account_name": "帳戶", "institution": "機構", "symbol": "代號／幣別", "name": "名稱",
+                "quantity": "數量", "total_cost": "總取得成本", "average_cost": "平均成本",
+                "current_price_twd": "現價(TWD)", "current_value": "估計現值", "unrealized_pnl": "未實現差額",
+                "return_rate": "差額率(%)", "price_source": "價格來源", "price_at": "行情時間", "stale": "過期",
+            })
+            visible = [column for column in ["帳戶", "機構", "代號／幣別", "名稱", "數量", "總取得成本", "平均成本", "現價(TWD)", "估計現值", "未實現差額", "差額率(%)", "價格來源", "行情時間", "過期"] if column in frame]
+            quantity_format = {"STOCK": "%.0f", "CRYPTO": "%.8f"}.get(asset_type, "%.2f")
+            price_format = "%.8f" if asset_type == "CRYPTO" else "%.2f"
+            st.dataframe(
+                frame[visible],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "數量": st.column_config.NumberColumn(format=quantity_format),
+                    "總取得成本": st.column_config.NumberColumn(format="%.2f"),
+                    "平均成本": st.column_config.NumberColumn(format=price_format),
+                    "現價(TWD)": st.column_config.NumberColumn(format=price_format),
+                    "估計現值": st.column_config.NumberColumn(format="%.2f"),
+                    "未實現差額": st.column_config.NumberColumn(format="%.2f"),
+                    "差額率(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                },
+            )
+
+    accounts = api("GET", "/personal-assets/accounts") or []
+    positions = dashboard_data["positions"]
+    with st.expander("管理個人資產", expanded=not accounts):
+        management_tabs = st.tabs(["建立帳戶", "期初建檔", "資產異動", "手動估值", "沖銷紀錄"])
+        with management_tabs[0]:
+            with st.form("personal_account_form", clear_on_submit=True):
+                a1, a2 = st.columns(2)
+                account_name = a1.text_input("帳戶名稱", placeholder="例如：臺銀台幣帳戶")
+                institution = a2.text_input("機構", placeholder="例如：臺灣銀行")
+                a3, a4 = st.columns(2)
+                asset_type = a3.selectbox("資產類型", list(ASSET_TYPE_LABELS), format_func=ASSET_TYPE_LABELS.get)
+                currency = a4.text_input("帳戶幣別", value="TWD").strip().upper()
+                if st.form_submit_button("建立資產帳戶", type="primary"):
+                    if api("POST", "/personal-assets/accounts", json={
+                        "name": account_name, "institution": institution,
+                        "asset_type": asset_type, "currency": currency,
+                    }):
+                        st.success("資產帳戶已建立")
+                        st.rerun()
+
+        account_labels = {f'{row["name"]}｜{ASSET_TYPE_LABELS[row["asset_type"]]}｜{row["institution"]}': row for row in accounts}
+        with management_tabs[1]:
+            if not accounts:
+                st.info("請先建立資產帳戶。")
+            else:
+                with st.form("personal_opening_form", clear_on_submit=True):
+                    selected_label = st.selectbox("資產帳戶", list(account_labels), key="opening_account")
+                    selected_account = account_labels[selected_label]
+                    o1, o2 = st.columns(2)
+                    opening_symbol = o1.text_input("股票代號／幣別／資產代號", value="TWD" if selected_account["asset_type"] == "TWD" else "")
+                    opening_name = o2.text_input("資產名稱")
+                    o3, o4, o5 = st.columns(3)
+                    opening_quantity = o3.number_input("目前數量", min_value=0.00000001, step=1.0, format="%.8f")
+                    opening_cost = o4.number_input("總取得成本／累計保費", min_value=0.0, step=1000.0)
+                    opening_value = o5.number_input("目前總現值", min_value=0.0, step=1000.0)
+                    o6, o7 = st.columns(2)
+                    valuation_date = o6.date_input("估值／期初日期", value=date.today())
+                    policy_last4 = o7.text_input("保單末四碼（非保險可留空）", max_chars=4)
+                    opening_note = st.text_input("備註", key="opening_note")
+                    if st.form_submit_button("建立期初部位", type="primary"):
+                        payload = {
+                            "account_id": selected_account["id"], "asset_type": selected_account["asset_type"],
+                            "symbol": opening_symbol, "name": opening_name, "quantity": opening_quantity,
+                            "total_cost": opening_cost, "current_value": opening_value,
+                            "valuation_date": valuation_date.isoformat(), "policy_last4": policy_last4 or None,
+                            "policy_status": "ACTIVE" if selected_account["asset_type"] == "INSURANCE" else None,
+                            "occurred_at": pd.Timestamp.now(tz="Asia/Taipei").isoformat(), "note": opening_note,
+                        }
+                        if api("POST", "/personal-assets/opening", json=payload):
+                            st.success("期初部位已建立")
+                            st.rerun()
+
+        position_labels = {f'{row["id"]}｜{row["account_name"]}｜{row["symbol"]}｜{row["name"]}': row for row in positions}
+        with management_tabs[2]:
+            if not positions:
+                st.info("請先建立期初部位。")
+            else:
+                with st.form("personal_transaction_form", clear_on_submit=True):
+                    kind_labels = {
+                        "BUY": "買進／取得扣款", "SELL": "賣出／處分入帳", "TRANSFER": "內部移轉",
+                        "EXTERNAL_IN": "外部存入", "EXTERNAL_OUT": "外部支出",
+                        "PREMIUM": "繳交保費", "SURRENDER": "保單領回／解約",
+                    }
+                    tx_kind = st.selectbox("異動類型", list(kind_labels), format_func=kind_labels.get)
+                    optional_labels = {"不指定": None, **{label: row for label, row in position_labels.items()}}
+                    t1, t2 = st.columns(2)
+                    source_label = t1.selectbox("來源部位", list(optional_labels), key="tx_source")
+                    target_label = t2.selectbox("目標／入帳部位", list(optional_labels), key="tx_target")
+                    t3, t4, t5 = st.columns(3)
+                    tx_quantity = t3.number_input("數量", min_value=0.0, step=1.0, format="%.8f")
+                    tx_gross = t4.number_input("成交總額／存支金額", min_value=0.0, step=1000.0)
+                    tx_fees = t5.number_input("費用與稅額（可為 0）", min_value=0.0, step=1.0)
+                    st.caption("保單領回的數量以持有比例填寫：1 為全額，0.25 為四分之一。")
+                    tx_date = st.date_input("異動日期", value=date.today(), key="tx_date")
+                    tx_note = st.text_input("異動備註", key="tx_note")
+                    if st.form_submit_button("登記資產異動", type="primary"):
+                        source = optional_labels[source_label]
+                        target = optional_labels[target_label]
+                        if api("POST", "/personal-assets/transactions", json={
+                            "kind": tx_kind,
+                            "source_position_id": source["id"] if source else None,
+                            "target_position_id": target["id"] if target else None,
+                            "quantity": tx_quantity, "gross_amount": tx_gross, "fees": tx_fees,
+                            "occurred_at": pd.Timestamp(tx_date, tz="Asia/Taipei").isoformat(), "note": tx_note,
+                        }):
+                            st.success("資產異動已入帳")
+                            st.rerun()
+
+        with management_tabs[3]:
+            if not positions:
+                st.info("目前沒有可更新的部位。")
+            else:
+                with st.form("personal_manual_price_form"):
+                    price_label = st.selectbox("資產部位", list(position_labels), key="manual_price_position")
+                    manual_price = st.number_input("每單位新臺幣價格（保單請填總現值）", min_value=0.00000001, step=1.0)
+                    if st.form_submit_button("儲存手動備援價格"):
+                        row = position_labels[price_label]
+                        if api("PATCH", f'/personal-assets/positions/{row["id"]}/price', json={
+                            "price_twd": manual_price, "quoted_at": pd.Timestamp.now(tz="Asia/Taipei").isoformat(),
+                        }):
+                            st.success("手動估值已更新")
+                            st.rerun()
+
+        with management_tabs[4]:
+            transactions = api("GET", "/personal-assets/transactions?limit=200") or []
+            if transactions:
+                st.dataframe(pd.DataFrame(transactions), use_container_width=True, hide_index=True)
+                reversible = [row for row in transactions if row["kind"] != "REVERSAL" and not row["reversed_at"]]
+                if reversible:
+                    with st.form("personal_reversal_form"):
+                        reversal_id = st.selectbox("要修正的異動編號", [row["id"] for row in reversible])
+                        reversal_reason = st.text_input("沖銷原因")
+                        if st.form_submit_button("沖銷此筆並保留紀錄"):
+                            if api("POST", f"/personal-assets/transactions/{reversal_id}/reverse", json={
+                                "occurred_at": pd.Timestamp.now(tz="Asia/Taipei").isoformat(), "reason": reversal_reason,
+                            }):
+                                st.success("異動已沖銷")
+                                st.rerun()
+            else:
+                st.info("尚無資產異動紀錄。")
+
+
+dashboard = api("GET", "/dashboard")
+
+main_tab_names = ["觀察清單", "持股總覽", "盤中限價單", "立即買進", "收盤價 / S 點", "賣出", "交易紀錄", "個人資產"]
+tab_watchlist, tab_dashboard, tab_orders, tab_buy, tab_prices, tab_sell, tab_history, tab_personal = st.tabs(
     main_tab_names,
     default=st.session_state.get("main_tab_default", "觀察清單"),
     key=f'main_tabs_{st.session_state.get("main_tabs_version", 0)}',
@@ -333,6 +529,17 @@ with tab_watchlist:
     render_watchlist()
 
 with tab_dashboard:
+    if dashboard:
+        metrics = st.columns(5)
+        items = [
+            ("模擬總資產", dashboard["total_assets"]), ("模擬可用現金", dashboard["available_cash"]),
+            ("模擬持股市值", dashboard["market_value"]), ("模擬總損益", dashboard["total_pnl"]),
+            ("模擬報酬率", f'{dashboard["return_rate"]}%'),
+        ]
+        for col, (label, value) in zip(metrics, items, strict=True):
+            col.metric(label, f"{float(value):,.2f}" if label != "模擬報酬率" else value)
+        if float(dashboard["reserved_cash"]) > 0:
+            st.caption(f'模擬掛單凍結現金：NT$ {float(dashboard["reserved_cash"]):,.2f}')
     if dashboard and dashboard["holdings"]:
         frame = pd.DataFrame(dashboard["holdings"]).rename(
             columns={
@@ -431,3 +638,6 @@ with tab_history:
         st.dataframe(trade_frame.drop(columns=["id"]), use_container_width=True, hide_index=True)
     else:
         st.info("尚無交易紀錄。")
+
+with tab_personal:
+    render_personal_assets()

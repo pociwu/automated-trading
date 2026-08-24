@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     fugle_rest_url: str = "https://api.fugle.tw/marketdata/v1.0/stock"
     fugle_websocket_url: str = "wss://api.fugle.tw/marketdata/v1.0/stock/streaming"
     fugle_max_subscriptions: int = 5
+    bot_fx_url: str = "https://rate.bot.com.tw/xrt?Lang=zh-TW"
+    bot_gold_url: str = "https://rate.bot.com.tw/gold?Lang=zh-TW"
+    coingecko_api_url: str = "https://api.coingecko.com/api/v3"
+    coingecko_demo_api_key: str = ""
+    personal_asset_snapshot_times: str = "09:30,13:30"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
