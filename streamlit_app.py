@@ -432,24 +432,26 @@ def render_personal_assets() -> None:
                     opening_symbol = o1.text_input("股票代號／幣別／資產代號", value=default_symbol)
                     opening_name = o2.text_input("資產名稱", value=default_name)
                     o3, o4, o5 = st.columns(3)
-                    quantity_label = "黃金庫存（公克）" if selected_type == "GOLD" else "目前數量"
-                    cost_label = "買入總成本（含費用）" if selected_type == "GOLD" else "總取得成本／累計保費"
+                    quantity_label = "黃金持有部位（g）" if selected_type == "GOLD" else "目前數量"
+                    cost_label = "每公克單位成本" if selected_type == "GOLD" else "總取得成本／累計保費"
                     value_label = "目前總現值（可填 0）" if selected_type == "GOLD" else "目前總現值"
                     opening_quantity = o3.number_input(quantity_label, min_value=0.01 if selected_type == "GOLD" else 0.00000001, step=0.01 if selected_type == "GOLD" else 1.0, format="%.2f" if selected_type == "GOLD" else "%.8f")
-                    opening_cost = o4.number_input(cost_label, min_value=0.0, step=1000.0)
+                    opening_cost = o4.number_input(cost_label, min_value=0.0, step=100.0 if selected_type == "GOLD" else 1000.0)
                     opening_value = o5.number_input(value_label, min_value=0.0, step=1000.0)
                     o6, o7 = st.columns(2)
                     opening_date_label = "買入日期" if selected_type == "GOLD" else "估值／期初日期"
                     opening_date = o6.date_input(opening_date_label, value=date.today())
                     policy_last4 = o7.text_input("保單末四碼（非保險可留空）", max_chars=4)
                     if selected_type == "GOLD":
-                        st.caption("庫存以公克輸入；平均買入成本會由買入總成本 ÷ 庫存自動計算，現值在更新行情後依臺銀本行買進價計算。")
+                        st.caption("總取得成本＝持有部位 × 每公克單位成本。期初建檔只登記既有黃金，不會扣除任何銀行帳戶現金；現值在更新行情後依臺銀本行買進價計算。")
                     opening_note = st.text_input("備註", key="opening_note")
                     if st.form_submit_button("建立期初部位", type="primary"):
+                        total_cost = opening_quantity * opening_cost if selected_type == "GOLD" else opening_cost
                         payload = {
                             "account_id": selected_account["id"], "asset_type": selected_account["asset_type"],
                             "symbol": opening_symbol, "name": opening_name, "quantity": opening_quantity,
-                            "total_cost": opening_cost, "current_value": opening_value,
+                            "total_cost": total_cost,
+                            "current_value": None if selected_type == "GOLD" and opening_value == 0 else opening_value,
                             "valuation_date": opening_date.isoformat() if selected_type == "INSURANCE" else None,
                             "policy_last4": policy_last4 or None,
                             "policy_status": "ACTIVE" if selected_type == "INSURANCE" else None,

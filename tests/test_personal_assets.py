@@ -109,7 +109,7 @@ def test_dashboard_and_snapshot_keep_personal_assets_separate(db):
     service = PersonalAssetService(db)
     bank = account(service, "銀行", PersonalAssetType.TWD)
     gold_account = account(service, "黃金", PersonalAssetType.GOLD)
-    opening(service, bank.id, PersonalAssetType.TWD, "TWD", "1000", "1000", "1000")
+    cash = opening(service, bank.id, PersonalAssetType.TWD, "TWD", "1000", "1000", "1000")
     opening(service, gold_account.id, PersonalAssetType.GOLD, "BOT_GOLD_TWD", "2", "8000", "9000")
 
     valuation = PersonalAssetValuationService(db)
@@ -126,6 +126,8 @@ def test_dashboard_and_snapshot_keep_personal_assets_separate(db):
     assert gold.total_cost == Decimal("8000.00")
     assert gold.average_cost == Decimal("4000.00")
     assert gold.acquired_at == NOW.replace(tzinfo=None)
+    assert cash.quantity == Decimal("1000.00000000")
+    assert [row.kind for row in service.transactions()] == ["OPENING", "OPENING"]
 
 
 def test_opening_can_be_reversed_and_reentered(db):
