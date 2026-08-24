@@ -136,6 +136,7 @@ class PersonalAssetPositionRead(BaseModel):
     return_rate: Decimal
     price_source: str | None
     price_at: datetime | None
+    acquired_at: datetime | None
     stale: bool
     valuation_date: date | None
     policy_last4: str | None

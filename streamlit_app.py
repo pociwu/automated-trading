@@ -374,9 +374,12 @@ def render_personal_assets() -> None:
                 "account_name": "帳戶", "institution": "機構", "symbol": "代號／幣別", "name": "名稱",
                 "quantity": "數量", "total_cost": "總取得成本", "average_cost": "平均成本",
                 "current_price_twd": "現價(TWD)", "current_value": "估計現值", "unrealized_pnl": "未實現差額",
-                "return_rate": "差額率(%)", "price_source": "價格來源", "price_at": "行情時間", "stale": "過期",
+                "return_rate": "差額率(%)", "price_source": "價格來源", "price_at": "行情時間",
+                "acquired_at": "首次買入日期", "stale": "過期",
             })
-            visible = [column for column in ["帳戶", "機構", "代號／幣別", "名稱", "數量", "總取得成本", "平均成本", "現價(TWD)", "估計現值", "未實現差額", "差額率(%)", "價格來源", "行情時間", "過期"] if column in frame]
+            if asset_type == "GOLD" and "首次買入日期" in frame:
+                frame["首次買入日期"] = pd.to_datetime(frame["首次買入日期"], utc=True).dt.tz_convert("Asia/Taipei").dt.date
+            visible = [column for column in ["帳戶", "機構", "代號／幣別", "名稱", "數量", "總取得成本", "平均成本", "首次買入日期", "現價(TWD)", "估計現值", "未實現差額", "差額率(%)", "價格來源", "行情時間", "過期"] if column in frame and (column != "首次買入日期" or asset_type == "GOLD")]
             quantity_format = {"STOCK": "%.0f", "CRYPTO": "%.8f"}.get(asset_type, "%.2f")
             price_format = "%.8f" if asset_type == "CRYPTO" else "%.2f"
             st.dataframe(
@@ -419,28 +422,38 @@ def render_personal_assets() -> None:
             if not accounts:
                 st.info("請先建立資產帳戶。")
             else:
+                selected_label = st.selectbox("資產帳戶", list(account_labels), key="opening_account")
+                selected_account = account_labels[selected_label]
+                selected_type = selected_account["asset_type"]
                 with st.form("personal_opening_form", clear_on_submit=True):
-                    selected_label = st.selectbox("資產帳戶", list(account_labels), key="opening_account")
-                    selected_account = account_labels[selected_label]
                     o1, o2 = st.columns(2)
-                    opening_symbol = o1.text_input("股票代號／幣別／資產代號", value="TWD" if selected_account["asset_type"] == "TWD" else "")
-                    opening_name = o2.text_input("資產名稱")
+                    default_symbol = {"TWD": "TWD", "GOLD": "BOT_GOLD_TWD"}.get(selected_type, "")
+                    default_name = "臺灣銀行黃金存摺" if selected_type == "GOLD" else ""
+                    opening_symbol = o1.text_input("股票代號／幣別／資產代號", value=default_symbol)
+                    opening_name = o2.text_input("資產名稱", value=default_name)
                     o3, o4, o5 = st.columns(3)
-                    opening_quantity = o3.number_input("目前數量", min_value=0.00000001, step=1.0, format="%.8f")
-                    opening_cost = o4.number_input("總取得成本／累計保費", min_value=0.0, step=1000.0)
-                    opening_value = o5.number_input("目前總現值", min_value=0.0, step=1000.0)
+                    quantity_label = "黃金庫存（公克）" if selected_type == "GOLD" else "目前數量"
+                    cost_label = "買入總成本（含費用）" if selected_type == "GOLD" else "總取得成本／累計保費"
+                    value_label = "目前總現值（可填 0）" if selected_type == "GOLD" else "目前總現值"
+                    opening_quantity = o3.number_input(quantity_label, min_value=0.01 if selected_type == "GOLD" else 0.00000001, step=0.01 if selected_type == "GOLD" else 1.0, format="%.2f" if selected_type == "GOLD" else "%.8f")
+                    opening_cost = o4.number_input(cost_label, min_value=0.0, step=1000.0)
+                    opening_value = o5.number_input(value_label, min_value=0.0, step=1000.0)
                     o6, o7 = st.columns(2)
-                    valuation_date = o6.date_input("估值／期初日期", value=date.today())
+                    opening_date_label = "買入日期" if selected_type == "GOLD" else "估值／期初日期"
+                    opening_date = o6.date_input(opening_date_label, value=date.today())
                     policy_last4 = o7.text_input("保單末四碼（非保險可留空）", max_chars=4)
+                    if selected_type == "GOLD":
+                        st.caption("庫存以公克輸入；平均買入成本會由買入總成本 ÷ 庫存自動計算，現值在更新行情後依臺銀本行買進價計算。")
                     opening_note = st.text_input("備註", key="opening_note")
                     if st.form_submit_button("建立期初部位", type="primary"):
                         payload = {
                             "account_id": selected_account["id"], "asset_type": selected_account["asset_type"],
                             "symbol": opening_symbol, "name": opening_name, "quantity": opening_quantity,
                             "total_cost": opening_cost, "current_value": opening_value,
-                            "valuation_date": valuation_date.isoformat(), "policy_last4": policy_last4 or None,
-                            "policy_status": "ACTIVE" if selected_account["asset_type"] == "INSURANCE" else None,
-                            "occurred_at": pd.Timestamp.now(tz="Asia/Taipei").isoformat(), "note": opening_note,
+                            "valuation_date": opening_date.isoformat() if selected_type == "INSURANCE" else None,
+                            "policy_last4": policy_last4 or None,
+                            "policy_status": "ACTIVE" if selected_type == "INSURANCE" else None,
+                            "occurred_at": pd.Timestamp(opening_date, tz="Asia/Taipei").isoformat(), "note": opening_note,
                         }
                         if api("POST", "/personal-assets/opening", json=payload):
                             st.success("期初部位已建立")

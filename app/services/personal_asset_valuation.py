@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.entities import PersonalAssetAccount, PersonalAssetPosition, PersonalAssetSnapshot, PersonalAssetTransaction
@@ -77,7 +77,24 @@ class PersonalAssetValuationService:
     def position_reads(self) -> list[PersonalAssetPositionRead]:
         accounts = {row.id: row for row in self.db.scalars(select(PersonalAssetAccount)).all()}
         positions = self.db.scalars(select(PersonalAssetPosition).where(PersonalAssetPosition.active).order_by(PersonalAssetPosition.asset_type, PersonalAssetPosition.id)).all()
-        return [self._position_read(position, accounts[position.account_id]) for position in positions]
+        acquired_at = dict(
+            self.db.execute(
+                select(
+                    PersonalAssetTransaction.target_position_id,
+                    func.min(PersonalAssetTransaction.occurred_at),
+                )
+                .where(
+                    PersonalAssetTransaction.kind.in_(["OPENING", "BUY"]),
+                    PersonalAssetTransaction.reversed_at.is_(None),
+                    PersonalAssetTransaction.target_position_id.is_not(None),
+                )
+                .group_by(PersonalAssetTransaction.target_position_id)
+            ).all()
+        )
+        return [
+            self._position_read(position, accounts[position.account_id], acquired_at.get(position.id))
+            for position in positions
+        ]
 
     def create_snapshot(self, scheduled_at: datetime) -> PersonalAssetSnapshot:
         scheduled = self._naive(scheduled_at)
@@ -136,7 +153,11 @@ class PersonalAssetValuationService:
         }
 
     @staticmethod
-    def _position_read(position: PersonalAssetPosition, account: PersonalAssetAccount) -> PersonalAssetPositionRead:
+    def _position_read(
+        position: PersonalAssetPosition,
+        account: PersonalAssetAccount,
+        acquired_at: datetime | None,
+    ) -> PersonalAssetPositionRead:
         price = position.current_price_twd
         value = money(position.quantity * price) if price is not None else Decimal("0")
         basis = value if position.asset_type == PersonalAssetType.TWD.value else money(position.total_cost)
@@ -167,6 +188,7 @@ class PersonalAssetValuationService:
             return_rate=rate,
             price_source=position.price_source,
             price_at=position.price_at,
+            acquired_at=acquired_at,
             stale=stale,
             valuation_date=position.valuation_date,
             policy_last4=position.policy_last4,

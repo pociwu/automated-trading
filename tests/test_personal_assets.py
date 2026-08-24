@@ -115,12 +115,17 @@ def test_dashboard_and_snapshot_keep_personal_assets_separate(db):
     valuation = PersonalAssetValuationService(db)
     dashboard = valuation.dashboard()
     snapshot = valuation.create_snapshot(NOW)
+    gold = next(row for row in dashboard["positions"] if row.asset_type == PersonalAssetType.GOLD.value)
 
     assert dashboard["total_value"] == Decimal("10000.00")
     assert dashboard["total_basis"] == Decimal("9000.00")
     assert dashboard["estimated_difference"] == Decimal("1000.00")
     assert snapshot.twd_value == Decimal("1000.00")
     assert snapshot.gold_value == Decimal("9000.00")
+    assert gold.quantity == Decimal("2.00000000")
+    assert gold.total_cost == Decimal("8000.00")
+    assert gold.average_cost == Decimal("4000.00")
+    assert gold.acquired_at == NOW.replace(tzinfo=None)
 
 
 def test_opening_can_be_reversed_and_reentered(db):
