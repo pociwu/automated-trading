@@ -44,3 +44,33 @@ def test_bot_gold_fx_and_coingecko_prices_are_parsed(monkeypatch):
     assert fx == {"USD": Decimal("30.50000"), "JPY": Decimal("0.20500")}
     assert crypto["BTC"] == Decimal("3000000")
     assert crypto["LINK"] == Decimal("700")
+
+
+def test_gold_falls_back_to_esun_when_bot_requires_browser_challenge(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "rate.example.test":
+            return httpx.Response(
+                200,
+                text='''<html><title>Challenge Validation</title>
+                <iframe challenge="token" data-duration=30></iframe>
+                <input type="hidden" name="verify-url" value="challenge"></html>''',
+            )
+        return httpx.Response(
+            200,
+            text='''<div class="goldCard">
+            <span class="goldCard-name">新臺幣計價</span><span class="goldCard-unit">1 公克</span>
+            <span class="goldCard-label">銀行買進</span>
+            <span class="goldCard-value js-twd-buy">4,739</span>
+            <span class="goldCard-timeValue js-twd-time">2026-08-24 15:25:00</span></div>''',
+        )
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "bot_gold_url", "https://rate.example.test/gold")
+    monkeypatch.setattr(settings, "esun_gold_url", "https://esun.example.test/gold")
+    provider = PersonalAssetMarketDataProvider(httpx.Client(transport=httpx.MockTransport(handler)))
+
+    price, quoted_at, source = provider.gold_buy_price()
+
+    assert price == Decimal("4739")
+    assert quoted_at.isoformat() == "2026-08-24T07:25:00+00:00"
+    assert source == "玉山銀行黃金存摺銀行買進價"

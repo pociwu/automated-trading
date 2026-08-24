@@ -325,7 +325,10 @@ def render_personal_assets() -> None:
         refreshed = api("POST", "/personal-assets/quotes/refresh")
         if refreshed is not None:
             if refreshed["stale_symbols"]:
-                st.warning("部分行情更新失敗，已沿用最後成功價格。")
+                st.warning(
+                    "部分行情更新失敗，已沿用最後成功價格："
+                    + "；".join(refreshed["stale_symbols"])
+                )
             else:
                 st.success(f'已更新 {refreshed["updated"]} 筆行情')
             st.rerun()

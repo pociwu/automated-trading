@@ -39,6 +39,7 @@ services:
       FUGLE_MAX_SUBSCRIPTIONS: ${FUGLE_MAX_SUBSCRIPTIONS:-5}
       FUGLE_API_KEY: ${FUGLE_API_KEY:?Set FUGLE_API_KEY in .env}
       FUGLE_REST_URL: https://api.fugle.tw/marketdata/v1.0/stock
+      ESUN_GOLD_URL: ${ESUN_GOLD_URL:-https://wealth.esunbank.com/zh-tw/gold/price/current-price}
       COINGECKO_DEMO_API_KEY: ${COINGECKO_DEMO_API_KEY:-}
       PERSONAL_ASSET_SNAPSHOT_TIMES: ${PERSONAL_ASSET_SNAPSHOT_TIMES:-09:30,13:30}
       TZ: Asia/Taipei
@@ -91,6 +92,7 @@ services:
       FUGLE_API_KEY: ${FUGLE_API_KEY:?Set FUGLE_API_KEY in .env}
       FUGLE_REST_URL: https://api.fugle.tw/marketdata/v1.0/stock
       TWSE_API_URL: https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL
+      ESUN_GOLD_URL: ${ESUN_GOLD_URL:-https://wealth.esunbank.com/zh-tw/gold/price/current-price}
       COINGECKO_DEMO_API_KEY: ${COINGECKO_DEMO_API_KEY:-}
       PERSONAL_ASSET_SNAPSHOT_TIMES: ${PERSONAL_ASSET_SNAPSHOT_TIMES:-09:30,13:30}
       TZ: Asia/Taipei

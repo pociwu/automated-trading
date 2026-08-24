@@ -29,17 +29,47 @@ class PersonalAssetMarketDataProvider:
         self.client = client or httpx.Client(timeout=settings.market_data_timeout_seconds, follow_redirects=True)
 
     def gold_buy_price(self) -> tuple[Decimal, datetime, str]:
+        try:
+            return self._bot_gold_buy_price()
+        except (httpx.HTTPError, MarketDataError) as bot_error:
+            try:
+                return self._esun_gold_buy_price()
+            except (httpx.HTTPError, MarketDataError) as esun_error:
+                raise MarketDataError(
+                    f"黃金牌價來源皆無法使用；臺灣銀行：{bot_error}；玉山銀行：{esun_error}"
+                ) from esun_error
+
+    def _bot_gold_buy_price(self) -> tuple[Decimal, datetime, str]:
         response = self.client.get(self.settings.bot_gold_url, headers={"Accept": "text/html"})
         response.raise_for_status()
+        self._raise_for_bot_challenge(response.text)
         text = self._visible_text(response.text)
         match = re.search(r"黃金存摺\s*本行賣出\s*[\d,.]+\s*本行買進\s*([\d,.]+)", text)
         if not match:
             raise MarketDataError("無法解析臺灣銀行黃金存摺買進價")
         return self._decimal(match.group(1)), self._bot_time(text), "臺灣銀行黃金存摺買進價"
 
+    def _esun_gold_buy_price(self) -> tuple[Decimal, datetime, str]:
+        response = self.client.get(self.settings.esun_gold_url, headers={"Accept": "text/html"})
+        response.raise_for_status()
+        match = re.search(r'js-twd-buy[^>]*>\s*([\d,.]+)', response.text, flags=re.I)
+        quoted = re.search(
+            r'js-twd-time[^>]*>\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})',
+            response.text,
+            flags=re.I,
+        )
+        if not match or not quoted:
+            raise MarketDataError("無法解析玉山銀行黃金存摺銀行買進價")
+        return (
+            self._decimal(match.group(1)),
+            self._taipei_time(quoted.group(1), "%Y-%m-%d %H:%M:%S"),
+            "玉山銀行黃金存摺銀行買進價",
+        )
+
     def fx_spot_buy_rates(self) -> tuple[dict[str, Decimal], datetime, str]:
         response = self.client.get(self.settings.bot_fx_url, headers={"Accept": "text/html"})
         response.raise_for_status()
+        self._raise_for_bot_challenge(response.text)
         rates: dict[str, Decimal] = {}
         for row in re.findall(r"<tr[^>]*>(.*?)</tr>", response.text, flags=re.I | re.S):
             currency = re.search(r"\(([A-Z]{3})\)", self._visible_text(row))
@@ -100,6 +130,11 @@ class PersonalAssetMarketDataProvider:
         return re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
 
     @staticmethod
+    def _raise_for_bot_challenge(raw: str) -> None:
+        if "Challenge Validation" in raw and ("verify-url" in raw or "sec_cpt" in raw):
+            raise MarketDataError("臺灣銀行要求瀏覽器驗證，無法由伺服器自動取得牌價")
+
+    @staticmethod
     def _decimal(value: object) -> Decimal:
         try:
             result = Decimal(str(value).replace(",", "").strip())
@@ -118,3 +153,9 @@ class PersonalAssetMarketDataProvider:
 
         local = datetime(*(int(part) for part in match.groups()), tzinfo=ZoneInfo("Asia/Taipei"))
         return local.astimezone(UTC)
+
+    @staticmethod
+    def _taipei_time(value: str, date_format: str) -> datetime:
+        from zoneinfo import ZoneInfo
+
+        return datetime.strptime(value, date_format).replace(tzinfo=ZoneInfo("Asia/Taipei")).astimezone(UTC)

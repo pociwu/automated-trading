@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     fugle_max_subscriptions: int = 5
     bot_fx_url: str = "https://rate.bot.com.tw/xrt?Lang=zh-TW"
     bot_gold_url: str = "https://rate.bot.com.tw/gold?Lang=zh-TW"
+    esun_gold_url: str = "https://wealth.esunbank.com/zh-tw/gold/price/current-price"
     coingecko_api_url: str = "https://api.coingecko.com/api/v3"
     coingecko_demo_api_key: str = ""
     personal_asset_snapshot_times: str = "09:30,13:30"
