@@ -27,6 +27,11 @@ class FugleIntradayMarketDataProvider:
         self.api_key = settings.fugle_api_key if api_key is None else api_key
         self.url = settings.fugle_rest_url.rstrip("/")
         self.client = client or httpx.Client(timeout=settings.market_data_timeout_seconds)
+        self.quote_cache_seconds = settings.fugle_quote_cache_seconds
+        self.limits_cache_seconds = settings.fugle_limits_cache_seconds
+        self._quote_cache: dict[str, tuple[float, IntradayQuoteRead]] = {}
+        self._limits_cache: dict[str, tuple[float, PriceLimitsRead]] = {}
+        self._cache_lock = Lock()
 
     def get_quote(self, symbol: str) -> IntradayQuoteRead:
         normalized = symbol.strip().upper()
@@ -34,6 +39,9 @@ class FugleIntradayMarketDataProvider:
             raise MarketDataError("股票代號不可空白")
         if not self.api_key:
             raise MarketDataError("FUGLE_API_KEY 尚未設定")
+        cached = self._cached(self._quote_cache, normalized, self.quote_cache_seconds)
+        if cached is not None:
+            return cached
         try:
             response = self.client.get(
                 f"{self.url}/intraday/quote/{normalized}",
@@ -41,6 +49,8 @@ class FugleIntradayMarketDataProvider:
             )
             response.raise_for_status()
             payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise self._request_error(normalized, "即時行情", exc) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise MarketDataError(f"無法取得 {normalized} 即時行情") from exc
         if not isinstance(payload, dict):
@@ -55,7 +65,7 @@ class FugleIntradayMarketDataProvider:
             quoted_at = datetime.fromtimestamp(float(raw_time) / 1_000_000, UTC)
         except (OSError, OverflowError, TypeError, ValueError) as exc:
             raise MarketDataError(f"{normalized} 即時行情時間不正確") from exc
-        return IntradayQuoteRead(
+        quote = IntradayQuoteRead(
             symbol=str(payload.get("symbol") or normalized).strip().upper(),
             name=str(payload.get("name") or "").strip(),
             price=price,
@@ -64,6 +74,8 @@ class FugleIntradayMarketDataProvider:
             quoted_at=quoted_at,
             source=self.source,
         )
+        self._store(self._quote_cache, normalized, quote)
+        return quote
 
     def get_price_limits(self, symbol: str) -> PriceLimitsRead:
         normalized = symbol.strip().upper()
@@ -71,6 +83,9 @@ class FugleIntradayMarketDataProvider:
             raise MarketDataError("股票代號不可空白")
         if not self.api_key:
             raise MarketDataError("FUGLE_API_KEY 尚未設定")
+        cached = self._cached(self._limits_cache, normalized, self.limits_cache_seconds)
+        if cached is not None:
+            return cached
         try:
             response = self.client.get(
                 f"{self.url}/intraday/ticker/{normalized}",
@@ -78,16 +93,41 @@ class FugleIntradayMarketDataProvider:
             )
             response.raise_for_status()
             payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise self._request_error(normalized, "漲跌停價格", exc) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise MarketDataError(f"無法取得 {normalized} 漲跌停價格") from exc
         if not isinstance(payload, dict):
             raise MarketDataError("Fugle 股票基本資料格式不正確")
-        return PriceLimitsRead(
+        limits = PriceLimitsRead(
             symbol=str(payload.get("symbol") or normalized).strip().upper(),
             reference_price=self._decimal(payload.get("referencePrice"), "參考價"),
             limit_down_price=self._decimal(payload.get("limitDownPrice"), "跌停價"),
             limit_up_price=self._decimal(payload.get("limitUpPrice"), "漲停價"),
         )
+        self._store(self._limits_cache, normalized, limits)
+        return limits
+
+    def _cached(self, cache: dict, symbol: str, ttl: float):
+        with self._cache_lock:
+            cached = cache.get(symbol)
+            if cached is None or monotonic() - cached[0] >= ttl:
+                return None
+            return cached[1]
+
+    def _store(self, cache: dict, symbol: str, value: object) -> None:
+        with self._cache_lock:
+            cache[symbol] = (monotonic(), value)
+
+    @staticmethod
+    def _request_error(symbol: str, label: str, exc: httpx.HTTPStatusError) -> MarketDataError:
+        status = exc.response.status_code
+        reason = {
+            401: "API Key 無法驗證",
+            403: "目前方案沒有此功能權限",
+            429: "呼叫次數已達方案上限，請稍後再試",
+        }.get(status, "行情服務回應錯誤")
+        return MarketDataError(f"無法取得 {symbol} {label}：Fugle HTTP {status}（{reason}）")
 
     @staticmethod
     def _decimal(value: object, label: str) -> Decimal:

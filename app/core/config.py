@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     fugle_rest_url: str = "https://api.fugle.tw/marketdata/v1.0/stock"
     fugle_websocket_url: str = "wss://api.fugle.tw/marketdata/v1.0/stock/streaming"
     fugle_max_subscriptions: int = 5
+    fugle_quote_cache_seconds: float = 10.0
+    fugle_limits_cache_seconds: float = 300.0
     bot_fx_url: str = "https://rate.bot.com.tw/xrt?Lang=zh-TW"
     bot_gold_url: str = "https://rate.bot.com.tw/gold?Lang=zh-TW"
     esun_gold_url: str = "https://wealth.esunbank.com/zh-tw/gold/price/current-price"

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -58,6 +59,7 @@ from app.services.personal_asset_valuation import PersonalAssetValuationService
 router = APIRouter(prefix="/api/v1")
 
 
+@lru_cache(maxsize=1)
 def get_intraday_market_data_provider() -> FugleIntradayMarketDataProvider:
     return FugleIntradayMarketDataProvider()
 

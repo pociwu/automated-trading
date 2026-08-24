@@ -116,7 +116,7 @@ def render_watchlist() -> None:
     rows = []
     for item in items:
         quote = api("GET", f'/market-data/intraday/{item["symbol"]}')
-        limits = api("GET", f'/market-data/intraday/{item["symbol"]}/limits')
+        limits = api("GET", f'/market-data/intraday/{item["symbol"]}/limits') if quote else None
         rows.append(
             {
                 **item,
@@ -466,21 +466,68 @@ def render_personal_assets() -> None:
                 selected_label = st.selectbox("資產帳戶", list(account_labels), key="opening_account")
                 selected_account = account_labels[selected_label]
                 selected_type = selected_account["asset_type"]
+
+                opening_context = f'{selected_account["id"]}:{selected_type}'
+                if st.session_state.get("personal_opening_context") != opening_context:
+                    st.session_state["personal_opening_context"] = opening_context
+                    st.session_state["personal_opening_symbol"] = {
+                        "TWD": "TWD",
+                        "GOLD": "BOT_GOLD_TWD",
+                    }.get(selected_type, "")
+                    st.session_state["personal_opening_name"] = (
+                        "臺灣銀行黃金存摺" if selected_type == "GOLD" else ""
+                    )
+                    st.session_state["personal_opening_quantity"] = (
+                        1 if selected_type == "STOCK" else (0.01 if selected_type == "GOLD" else 0.00000001)
+                    )
+
+                def load_opening_stock_name() -> None:
+                    symbol = st.session_state.get("personal_opening_symbol", "").strip().upper()
+                    st.session_state["personal_opening_symbol"] = symbol
+                    if selected_type != "STOCK" or not symbol:
+                        return
+                    quote = api("GET", f"/market-data/{symbol}")
+                    if quote:
+                        st.session_state["personal_opening_name"] = quote.get("name", "")
+
+                o1, o2 = st.columns(2)
+                opening_symbol = o1.text_input(
+                    "股票代號／幣別／資產代號",
+                    key="personal_opening_symbol",
+                    on_change=load_opening_stock_name,
+                )
+                opening_name = o2.text_input("資產名稱", key="personal_opening_name")
+                if selected_type == "STOCK":
+                    st.caption("輸入完整股票代號後按 Enter 或移開游標，系統會由臺灣證券交易所行情自動帶入股名。")
+
                 with st.form("personal_opening_form", clear_on_submit=True):
-                    o1, o2 = st.columns(2)
-                    default_symbol = {"TWD": "TWD", "GOLD": "BOT_GOLD_TWD"}.get(selected_type, "")
-                    default_name = "臺灣銀行黃金存摺" if selected_type == "GOLD" else ""
-                    opening_symbol = o1.text_input("股票代號／幣別／資產代號", value=default_symbol)
-                    opening_name = o2.text_input("資產名稱", value=default_name)
                     o3, o4, o5 = st.columns(3)
-                    quantity_label = "黃金持有部位（g）" if selected_type == "GOLD" else "目前數量"
+                    quantity_label = {
+                        "GOLD": "黃金持有部位（g）",
+                        "STOCK": "目前股數（1 張＝1,000 股）",
+                    }.get(selected_type, "目前數量")
                     cost_label = "每公克單位成本" if selected_type == "GOLD" else "總取得成本／累計保費"
                     value_label = "目前總現值（可填 0）" if selected_type == "GOLD" else "目前總現值"
-                    opening_quantity = o3.number_input(quantity_label, min_value=0.01 if selected_type == "GOLD" else 0.00000001, step=0.01 if selected_type == "GOLD" else 1.0, format="%.2f" if selected_type == "GOLD" else "%.8f")
+                    if selected_type == "STOCK":
+                        opening_quantity = o3.number_input(
+                            quantity_label,
+                            min_value=1,
+                            step=1,
+                            format="%d",
+                            key="personal_opening_quantity",
+                        )
+                    else:
+                        opening_quantity = o3.number_input(
+                            quantity_label,
+                            min_value=0.01 if selected_type == "GOLD" else 0.00000001,
+                            step=0.01 if selected_type == "GOLD" else 1.0,
+                            format="%.2f" if selected_type == "GOLD" else "%.8f",
+                            key="personal_opening_quantity",
+                        )
                     opening_cost = o4.number_input(cost_label, min_value=0.0, step=100.0 if selected_type == "GOLD" else 1000.0)
                     opening_value = o5.number_input(value_label, min_value=0.0, step=1000.0)
                     o6, o7 = st.columns(2)
-                    opening_date_label = "買入日期" if selected_type == "GOLD" else "估值／期初日期"
+                    opening_date_label = "買入日期" if selected_type in {"GOLD", "STOCK"} else "估值／期初日期"
                     opening_date = o6.date_input(opening_date_label, value=date.today())
                     policy_last4 = o7.text_input("保單末四碼（非保險可留空）", max_chars=4)
                     if selected_type == "GOLD":

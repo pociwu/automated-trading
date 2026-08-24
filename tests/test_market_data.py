@@ -1,8 +1,9 @@
 from decimal import Decimal
 
 import httpx
+import pytest
 
-from app.services.market_data import FugleIntradayMarketDataProvider, TwseMarketDataProvider
+from app.services.market_data import FugleIntradayMarketDataProvider, MarketDataError, TwseMarketDataProvider
 
 
 def test_twse_provider_parses_close_price():
@@ -80,3 +81,56 @@ def test_fugle_provider_parses_official_daily_price_limits():
     assert limits.reference_price == Decimal("1000")
     assert limits.limit_down_price == Decimal("900")
     assert limits.limit_up_price == Decimal("1100")
+
+
+def test_fugle_provider_caches_repeated_watchlist_requests():
+    calls = {"quote": 0, "limits": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/intraday/quote/" in request.url.path:
+            calls["quote"] += 1
+            return httpx.Response(
+                200,
+                json={
+                    "symbol": "2330",
+                    "name": "台積電",
+                    "lastTrade": {"price": 1025, "time": 1785632400000000},
+                },
+            )
+        calls["limits"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "symbol": "2330",
+                "referencePrice": 1000,
+                "limitDownPrice": 900,
+                "limitUpPrice": 1100,
+            },
+        )
+
+    provider = FugleIntradayMarketDataProvider(
+        api_key="test-key",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    provider.get_quote("2330")
+    provider.get_price_limits("2330")
+    provider.get_quote("2330")
+    provider.get_price_limits("2330")
+
+    assert calls == {"quote": 1, "limits": 1}
+
+
+def test_fugle_provider_reports_rate_limit_status():
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"message": "Rate limit exceeded"})
+
+    provider = FugleIntradayMarketDataProvider(
+        api_key="test-key",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(MarketDataError) as error:
+        provider.get_quote("2330")
+
+    assert str(error.value) == "無法取得 2330 即時行情：Fugle HTTP 429（呼叫次數已達方案上限，請稍後再試）"

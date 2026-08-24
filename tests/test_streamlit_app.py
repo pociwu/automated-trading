@@ -243,3 +243,69 @@ def test_personal_assets_show_category_summary_below_total(monkeypatch):
     assert stock["投入成本"] == 100000.0
     assert stock["現值"] == 120000.0
     assert stock["投報率"] == 20.0
+
+
+def test_stock_opening_symbol_prefills_name_and_uses_share_quantity(monkeypatch):
+    def fake_request(method: str, url: str, **kwargs):
+        if "personal-assets/dashboard" in url:
+            return FakeResponse(
+                {
+                    "total_value": "0.00",
+                    "total_basis": "0.00",
+                    "estimated_difference": "0.00",
+                    "stale_count": 0,
+                    "positions": [],
+                    "snapshots": [],
+                    "has_backdated_changes": False,
+                }
+            )
+        if url.endswith("/personal-assets/accounts"):
+            return FakeResponse(
+                [
+                    {
+                        "id": 1,
+                        "name": "個人台股",
+                        "institution": "富邦證券",
+                        "asset_type": "STOCK",
+                        "currency": "TWD",
+                    }
+                ]
+            )
+        if url.endswith("/market-data/4916"):
+            return FakeResponse(
+                {
+                    "symbol": "4916",
+                    "name": "事欣科",
+                    "close": "45.50",
+                    "price_date": "2026-08-24",
+                    "source": "TWSE OpenAPI",
+                }
+            )
+        if url.endswith("/dashboard"):
+            return FakeResponse(
+                {
+                    "initial_capital": "2000000.00",
+                    "cash": "2000000.00",
+                    "reserved_cash": "0.00",
+                    "available_cash": "2000000.00",
+                    "holdings_cost": "0.00",
+                    "market_value": "0.00",
+                    "total_assets": "2000000.00",
+                    "total_pnl": "0.00",
+                    "return_rate": "0.00",
+                    "holdings": [],
+                }
+            )
+        return FakeResponse([])
+
+    monkeypatch.setenv("MARKET_QUOTE_REFRESH_INTERVAL", "off")
+    monkeypatch.setattr("requests.request", fake_request)
+    app_path = Path(__file__).parents[1] / "streamlit_app.py"
+    app = AppTest.from_file(app_path, default_timeout=20).run()
+
+    app.text_input(key="personal_opening_symbol").set_value("4916").run()
+
+    assert not app.exception
+    assert app.text_input(key="personal_opening_name").value == "事欣科"
+    assert app.number_input(key="personal_opening_quantity").label == "目前股數（1 張＝1,000 股）"
+    assert app.number_input(key="personal_opening_quantity").value == 1
