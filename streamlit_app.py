@@ -441,7 +441,7 @@ def render_personal_assets() -> None:
     accounts = api("GET", "/personal-assets/accounts") or []
     positions = dashboard_data["positions"]
     with st.expander("管理個人資產", expanded=not accounts):
-        management_tabs = st.tabs(["建立帳戶", "期初建檔", "資產異動", "手動估值", "沖銷紀錄"])
+        management_tabs = st.tabs(["建立帳戶", "期初建檔", "資產異動", "手動估值", "沖銷紀錄", "清空重置"])
         with management_tabs[0]:
             with st.form("personal_account_form", clear_on_submit=True):
                 a1, a2 = st.columns(2)
@@ -700,6 +700,34 @@ def render_personal_assets() -> None:
                                 st.rerun()
             else:
                 st.info("尚無資產異動紀錄。")
+
+        with management_tabs[5]:
+            st.warning(
+                "此操作會永久清除所有個人資產期初部位、期初／沖銷紀錄及資產快照；"
+                "已建立的資產帳戶會保留。"
+            )
+            st.caption("若已有買進、賣出、轉帳、存支或保費等正式異動，系統會拒絕重置。")
+            with st.form("reset_personal_opening_form"):
+                reset_confirmation = st.text_input(
+                    "輸入「清空期初資產」確認",
+                    key="reset_opening_confirmation",
+                )
+                if st.form_submit_button("清空並重置期初資產"):
+                    if reset_confirmation != "清空期初資產":
+                        st.warning("確認文字不正確，未執行清空。")
+                    else:
+                        result = api(
+                            "POST",
+                            "/personal-assets/opening/reset",
+                            json={"confirmation": reset_confirmation},
+                        )
+                        if result:
+                            st.success(
+                                f'期初資產已重置：清除 {result["deleted_positions"]} 個部位、'
+                                f'{result["deleted_transactions"]} 筆紀錄與 '
+                                f'{result["deleted_snapshots"]} 筆快照。'
+                            )
+                            st.rerun()
 
 
 dashboard = api("GET", "/dashboard")

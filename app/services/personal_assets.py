@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models.entities import (
@@ -45,6 +45,33 @@ class PersonalAssetService:
 
     def accounts(self) -> list[PersonalAssetAccount]:
         return list(self.db.scalars(select(PersonalAssetAccount).where(PersonalAssetAccount.active).order_by(PersonalAssetAccount.id)).all())
+
+    def reset_opening_assets(self) -> dict[str, int]:
+        blocking_transaction = self.db.scalar(
+            select(PersonalAssetTransaction.id)
+            .where(
+                PersonalAssetTransaction.kind.not_in(
+                    [PersonalTransactionKind.OPENING.value, PersonalTransactionKind.REVERSAL.value]
+                )
+            )
+            .limit(1)
+        )
+        if blocking_transaction is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="已有買進、賣出或其他正式資產異動，無法清空期初資產；請先逐筆沖銷後再重置",
+            )
+
+        counts = {
+            "deleted_positions": self.db.scalar(select(func.count()).select_from(PersonalAssetPosition)) or 0,
+            "deleted_transactions": self.db.scalar(select(func.count()).select_from(PersonalAssetTransaction)) or 0,
+            "deleted_snapshots": self.db.scalar(select(func.count()).select_from(PersonalAssetSnapshot)) or 0,
+        }
+        self.db.execute(delete(PersonalAssetTransaction))
+        self.db.execute(delete(PersonalAssetPosition))
+        self.db.execute(delete(PersonalAssetSnapshot))
+        self.db.commit()
+        return counts
 
     def opening(self, request: PersonalAssetOpeningCreate) -> PersonalAssetPosition:
         if self._naive_utc(request.occurred_at) > datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=1):

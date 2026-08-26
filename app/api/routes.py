@@ -34,6 +34,8 @@ from app.schemas.personal_assets import (
     PersonalAssetAccountRead,
     PersonalAssetDashboardRead,
     PersonalAssetOpeningCreate,
+    PersonalAssetOpeningReset,
+    PersonalAssetOpeningResetRead,
     PersonalAssetPositionRead,
     PersonalAssetReversalCreate,
     PersonalAssetSnapshotRead,
@@ -83,6 +85,15 @@ def create_personal_asset_account(payload: PersonalAssetAccountCreate, db: Sessi
 def create_personal_asset_opening(payload: PersonalAssetOpeningCreate, db: Session = Depends(get_db)):
     position = PersonalAssetService(db).opening(payload)
     return next(row for row in PersonalAssetValuationService(db).position_reads() if row.id == position.id)
+
+
+@router.post("/personal-assets/opening/reset", response_model=PersonalAssetOpeningResetRead)
+def reset_personal_asset_opening(
+    payload: PersonalAssetOpeningReset,
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    del payload
+    return PersonalAssetService(db).reset_opening_assets()
 
 
 @router.get("/personal-assets/dashboard", response_model=PersonalAssetDashboardRead)

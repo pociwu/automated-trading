@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -190,3 +191,13 @@ class PersonalAssetDashboardRead(BaseModel):
 class QuoteRefreshRead(BaseModel):
     updated: int
     stale_symbols: list[str]
+
+
+class PersonalAssetOpeningReset(BaseModel):
+    confirmation: Literal["清空期初資產"]
+
+
+class PersonalAssetOpeningResetRead(BaseModel):
+    deleted_positions: int
+    deleted_transactions: int
+    deleted_snapshots: int

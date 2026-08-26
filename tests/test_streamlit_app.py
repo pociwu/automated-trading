@@ -318,6 +318,8 @@ def test_stock_opening_symbol_prefills_name_and_uses_share_quantity(monkeypatch)
     assert submitted[0]["name"] == "事欣科"
     assert submitted[0]["quantity"] == 100
     assert submitted[0]["total_cost"] == 4550.0
+    assert app.text_input(key="reset_opening_confirmation").label == "輸入「清空期初資產」確認"
+    assert any(button.label == "清空並重置期初資產" for button in app.button)
 
 
 def test_stock_opening_can_be_deleted_from_opening_tab(monkeypatch):
