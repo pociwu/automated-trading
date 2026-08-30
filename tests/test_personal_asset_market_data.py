@@ -1,8 +1,10 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
 
 from app.core.config import get_settings
+from app.schemas.trading import IntradayQuoteRead
 from app.services.personal_asset_market_data import PersonalAssetMarketDataProvider
 
 
@@ -74,3 +76,26 @@ def test_gold_falls_back_to_esun_when_bot_requires_browser_challenge(monkeypatch
     assert price == Decimal("4739")
     assert quoted_at.isoformat() == "2026-08-24T07:25:00+00:00"
     assert source == "玉山銀行黃金存摺銀行買進價"
+
+
+def test_stock_price_uses_intraday_fallback_provider_before_daily_close():
+    class FakeStockProvider:
+        def get_quote(self, symbol: str) -> IntradayQuoteRead:
+            return IntradayQuoteRead(
+                symbol=symbol,
+                name="台積電",
+                price=Decimal("2420"),
+                bid=Decimal("2415"),
+                ask=Decimal("2420"),
+                quoted_at=datetime(2026, 8, 28, 6, 30, tzinfo=UTC),
+                source="TWSE MIS 基本市況報導（免 Key 備援）",
+            )
+
+    provider = PersonalAssetMarketDataProvider(stock_provider=FakeStockProvider())
+
+    price, quoted_at, source, name = provider.stock_price("2330")
+
+    assert price == Decimal("2420")
+    assert quoted_at == datetime(2026, 8, 28, 6, 30, tzinfo=UTC)
+    assert source == "TWSE MIS 基本市況報導（免 Key 備援）"
+    assert name == "台積電"

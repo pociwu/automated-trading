@@ -9,6 +9,7 @@
 | Database | PostgreSQL 17 + SQLAlchemy 2 | 帳戶、持股、成交、價格、委託與 matcher heartbeat |
 | Migration | Alembic | 唯一正式 schema 變更機制 |
 | Daily provider | TWSE OpenAPI | 盤後收盤價 |
+| Intraday query | Fugle REST → TWSE MIS | 盤中查價與漲跌停價格；MIS 為免 Key 備援 |
 | Intraday adapter | Fugle raw WebSocket | 盤中 trades tick、連線狀態與 stale-data 攔截 |
 | Matcher | Python worker | 將有效 tick 交給 paper order matcher |
 | Personal asset ledger | FastAPI service | 維護與模擬帳戶隔離的帳戶、部位及不可變資產異動 |
@@ -18,6 +19,8 @@
 ## 重要 seam
 
 `TwseMarketDataProvider.get_close(symbol)` 隱藏 TWSE HTTP、cache 與資料解析；呼叫端只取得標準化 quote。
+
+`FallbackIntradayMarketDataProvider` 將 Fugle REST 設為主來源、TWSE MIS 基本市況報導設為免 Key 備援。觀察清單、限價單驗證與個人資產估值可使用此查詢 seam；立即市價成交與 matcher 刻意繞過它，只接受 Fugle，以免網站備援的延遲行情直接觸發成交。
 
 `MarketDataHealthService` 是 API 與獨立 matcher process 的共享 seam。matcher 將連線生命週期及 Fugle 微秒 timestamp 寫入資料庫；API 從同一狀態計算 `healthy`、`degraded`、`unavailable` 或 `idle`。超過 `MARKET_DATA_STALE_AFTER_SECONDS` 的 tick 會在進入 `OrderService` 前被拒絕。
 

@@ -7,10 +7,11 @@ import httpx
 
 from app.core.config import get_settings
 from app.services.market_data import (
-    FugleIntradayMarketDataProvider,
+    FallbackIntradayMarketDataProvider,
     MarketDataError,
     TwseMarketDataProvider,
 )
+from app.services.ports import IntradayMarketDataPort
 
 
 CRYPTO_IDS = {
@@ -23,10 +24,15 @@ CRYPTO_IDS = {
 
 
 class PersonalAssetMarketDataProvider:
-    def __init__(self, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        stock_provider: IntradayMarketDataPort | None = None,
+    ) -> None:
         settings = get_settings()
         self.settings = settings
         self.client = client or httpx.Client(timeout=settings.market_data_timeout_seconds, follow_redirects=True)
+        self.stock_provider = stock_provider or FallbackIntradayMarketDataProvider()
 
     def gold_buy_price(self) -> tuple[Decimal, datetime, str]:
         try:
@@ -116,7 +122,7 @@ class PersonalAssetMarketDataProvider:
 
     def stock_price(self, symbol: str) -> tuple[Decimal, datetime, str, str]:
         try:
-            quote = FugleIntradayMarketDataProvider().get_quote(symbol)
+            quote = self.stock_provider.get_quote(symbol)
             return quote.price, quote.quoted_at, quote.source, quote.name
         except MarketDataError:
             quote = TwseMarketDataProvider(client=self.client).get_close(symbol)

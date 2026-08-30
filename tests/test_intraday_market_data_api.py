@@ -34,6 +34,11 @@ class FakeIntradayProvider:
         )()
 
 
+class ForbiddenFallbackProvider:
+    def get_quote(self, symbol: str):
+        raise AssertionError(f"市價成交不可使用備援行情：{symbol}")
+
+
 def test_intraday_quote_endpoint_returns_latest_trade():
     api = FastAPI()
     api.include_router(routes.router)
@@ -57,7 +62,8 @@ def test_market_buy_endpoint_uses_provider_price(db):
     api = FastAPI()
     api.include_router(routes.router)
     api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[routes.get_intraday_market_data_provider] = FakeIntradayProvider
+    api.dependency_overrides[routes.get_fugle_market_data_provider] = FakeIntradayProvider
+    api.dependency_overrides[routes.get_intraday_market_data_provider] = ForbiddenFallbackProvider
 
     response = TestClient(api).post(
         "/api/v1/trades/buy-market",

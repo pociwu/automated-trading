@@ -1,12 +1,18 @@
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from threading import Lock
 from time import monotonic
+from typing import TypeVar
 
 import httpx
 
 from app.core.config import get_settings
 from app.schemas.trading import IntradayQuoteRead, MarketQuoteRead, PriceLimitsRead
+from app.services.ports import LimitOrderMarketDataPort
+
+
+ResultT = TypeVar("ResultT")
 
 
 class MarketDataError(RuntimeError):
@@ -144,6 +150,146 @@ class FugleIntradayMarketDataProvider:
         if value is None:
             return None
         return cls._decimal(value, "買賣價")
+
+
+class TwseMisMarketDataProvider:
+    """免 API Key 的官方盤中行情備援；資料來源為 TWSE MIS 基本市況報導。"""
+
+    source = "TWSE MIS 基本市況報導（免 Key 備援）"
+
+    def __init__(self, client: httpx.Client | None = None) -> None:
+        settings = get_settings()
+        self.url = settings.twse_mis_url
+        self.client = client or httpx.Client(timeout=settings.market_data_timeout_seconds)
+        self.cache_seconds = settings.fugle_quote_cache_seconds
+        self._cache: dict[str, tuple[float, dict[str, object]]] = {}
+        self._lock = Lock()
+
+    def get_quote(self, symbol: str) -> IntradayQuoteRead:
+        normalized = self._symbol(symbol)
+        row = self._row(normalized)
+        raw_price = row.get("z")
+        if raw_price is None or str(raw_price).strip() in {"", "-"}:
+            raise MarketDataError(f"TWSE MIS 尚無 {normalized} 有效成交價")
+        raw_time = row.get("tlong")
+        try:
+            quoted_at = datetime.fromtimestamp(float(str(raw_time)) / 1000, UTC)
+        except (OSError, OverflowError, TypeError, ValueError) as exc:
+            raise MarketDataError(f"TWSE MIS {normalized} 行情時間不正確") from exc
+        return IntradayQuoteRead(
+            symbol=normalized,
+            name=str(row.get("n") or "").strip(),
+            price=self._decimal(raw_price, "最新成交價"),
+            bid=self._book_price(row.get("b")),
+            ask=self._book_price(row.get("a")),
+            quoted_at=quoted_at,
+            source=self.source,
+        )
+
+    def get_price_limits(self, symbol: str) -> PriceLimitsRead:
+        normalized = self._symbol(symbol)
+        row = self._row(normalized)
+        return PriceLimitsRead(
+            symbol=normalized,
+            reference_price=self._decimal(row.get("y"), "參考價"),
+            limit_down_price=self._decimal(row.get("w"), "跌停價"),
+            limit_up_price=self._decimal(row.get("u"), "漲停價"),
+        )
+
+    def _row(self, symbol: str) -> dict[str, object]:
+        with self._lock:
+            cached = self._cache.get(symbol)
+            if cached is not None and monotonic() - cached[0] < self.cache_seconds:
+                return cached[1]
+        try:
+            response = self.client.get(
+                self.url,
+                params={
+                    "ex_ch": f"tse_{symbol}.tw|otc_{symbol}.tw",
+                    "json": "1",
+                    "delay": "0",
+                },
+                headers={
+                    "Accept": "application/json",
+                    "Referer": f"https://mis.twse.com.tw/stock/fibest.jsp?stock={symbol}",
+                    "User-Agent": "Mozilla/5.0 (compatible; automated-trading/1.0)",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise MarketDataError(f"無法取得 TWSE MIS {symbol} 備援行情") from exc
+        rows = payload.get("msgArray") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            raise MarketDataError("TWSE MIS 回傳格式不正確")
+        row = next(
+            (
+                item
+                for item in rows
+                if isinstance(item, dict)
+                and str(item.get("c") or "").strip().upper() == symbol
+                and str(item.get("ex") or "").strip().lower() in {"tse", "otc"}
+            ),
+            None,
+        )
+        if row is None:
+            raise MarketDataError(f"TWSE MIS 找不到上市或上櫃股票 {symbol}")
+        with self._lock:
+            self._cache[symbol] = (monotonic(), row)
+        return row
+
+    @staticmethod
+    def _symbol(value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise MarketDataError("股票代號不可空白")
+        return normalized
+
+    @staticmethod
+    def _decimal(value: object, label: str) -> Decimal:
+        try:
+            result = Decimal(str(value))
+        except InvalidOperation as exc:
+            raise MarketDataError(f"TWSE MIS {label}不正確") from exc
+        if not result.is_finite() or result <= 0:
+            raise MarketDataError(f"TWSE MIS {label}不正確")
+        return result
+
+    @classmethod
+    def _book_price(cls, value: object) -> Decimal | None:
+        first = str(value or "").split("_", 1)[0].strip()
+        if not first or first == "-":
+            return None
+        return cls._decimal(first, "買賣價")
+
+
+class FallbackIntradayMarketDataProvider:
+    """Fugle 優先，失敗時改用免 Key 的 TWSE MIS 官方網站行情。"""
+
+    def __init__(
+        self,
+        primary: LimitOrderMarketDataPort | None = None,
+        fallback: LimitOrderMarketDataPort | None = None,
+    ) -> None:
+        self.primary = primary or FugleIntradayMarketDataProvider()
+        self.fallback = fallback or TwseMisMarketDataProvider()
+
+    def get_quote(self, symbol: str) -> IntradayQuoteRead:
+        return self._get(lambda provider: provider.get_quote(symbol))
+
+    def get_price_limits(self, symbol: str) -> PriceLimitsRead:
+        return self._get(lambda provider: provider.get_price_limits(symbol))
+
+    def _get(self, fetch: Callable[[LimitOrderMarketDataPort], ResultT]) -> ResultT:
+        try:
+            return fetch(self.primary)
+        except MarketDataError as primary_error:
+            try:
+                return fetch(self.fallback)
+            except MarketDataError as fallback_error:
+                raise MarketDataError(
+                    f"行情來源皆無法使用；Fugle：{primary_error}；TWSE MIS：{fallback_error}"
+                ) from fallback_error
 
 
 class TwseMarketDataProvider:

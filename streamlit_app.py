@@ -482,6 +482,8 @@ def render_personal_assets() -> None:
                     )
 
                 def load_opening_stock_name() -> None:
+                    if st.session_state.get("personal_opening_context") != opening_context:
+                        return
                     symbol = st.session_state.get("personal_opening_symbol", "").strip().upper()
                     st.session_state["personal_opening_symbol"] = symbol
                     if selected_type != "STOCK" or not symbol:
@@ -733,14 +735,18 @@ def render_personal_assets() -> None:
 dashboard = api("GET", "/dashboard")
 
 main_tab_names = ["觀察清單", "持股總覽", "盤中限價單", "立即買進", "收盤價 / S 點", "賣出", "交易紀錄", "個人資產"]
+main_tabs_key = f'main_tabs_{st.session_state.get("main_tabs_version", 0)}'
+# 追蹤目前分頁，避免編輯表單時仍註冊隱藏分頁的週期更新 fragment。
 tab_watchlist, tab_dashboard, tab_orders, tab_buy, tab_prices, tab_sell, tab_history, tab_personal = st.tabs(
     main_tab_names,
     default=st.session_state.get("main_tab_default", "觀察清單"),
-    key=f'main_tabs_{st.session_state.get("main_tabs_version", 0)}',
+    key=main_tabs_key,
+    on_change="rerun",
 )
 
 with tab_watchlist:
-    render_watchlist()
+    if tab_watchlist.open:
+        render_watchlist()
 
 with tab_dashboard:
     if dashboard:
@@ -770,7 +776,8 @@ with tab_dashboard:
 with tab_orders:
     st.caption("買單：最新成交價 ≤ 限價時成交；賣單：最新成交價 ≥ 限價時成交。")
     holdings_for_order = dashboard.get("holdings", []) if dashboard else []
-    render_limit_order(holdings_for_order)
+    if tab_orders.open:
+        render_limit_order(holdings_for_order)
 
     orders = api("GET", "/orders")
     if orders:
@@ -790,7 +797,8 @@ with tab_orders:
                 st.rerun()
 
 with tab_buy:
-    render_market_buy()
+    if tab_buy.open:
+        render_market_buy()
 
 with tab_prices:
     symbols = [row["symbol"] for row in dashboard.get("holdings", [])] if dashboard else []
@@ -838,7 +846,7 @@ with tab_sell:
     holdings = dashboard.get("holdings", []) if dashboard else []
     if not holdings:
         st.info("目前沒有可賣出的持股。")
-    else:
+    elif tab_sell.open:
         render_market_sell(holdings)
 
 with tab_history:
@@ -854,4 +862,5 @@ with tab_history:
         st.info("尚無交易紀錄。")
 
 with tab_personal:
-    render_personal_assets()
+    if tab_personal.open:
+        render_personal_assets()

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     initial_capital: Decimal = Decimal("2000000")
     api_base_url: str = "http://localhost:8000"
     twse_api_url: str = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+    twse_mis_url: str = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
     market_data_timeout_seconds: float = 15.0
     market_data_stale_after_seconds: float = 10.0
     fugle_api_key: str = ""

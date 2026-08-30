@@ -44,6 +44,7 @@ from app.schemas.personal_assets import (
     QuoteRefreshRead,
 )
 from app.services.market_data import (
+    FallbackIntradayMarketDataProvider,
     FugleIntradayMarketDataProvider,
     MarketDataError,
     TwseMarketDataProvider,
@@ -62,8 +63,13 @@ router = APIRouter(prefix="/api/v1")
 
 
 @lru_cache(maxsize=1)
-def get_intraday_market_data_provider() -> FugleIntradayMarketDataProvider:
+def get_fugle_market_data_provider() -> FugleIntradayMarketDataProvider:
     return FugleIntradayMarketDataProvider()
+
+
+@lru_cache(maxsize=1)
+def get_intraday_market_data_provider() -> FallbackIntradayMarketDataProvider:
+    return FallbackIntradayMarketDataProvider(primary=get_fugle_market_data_provider())
 
 
 @router.get("/health")
@@ -160,7 +166,7 @@ def watchlist(db: Session = Depends(get_db)) -> list[WatchlistItem]:
 def add_watchlist_item(
     payload: WatchlistCreate,
     db: Session = Depends(get_db),
-    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+    provider: FallbackIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
 ) -> WatchlistItem:
     try:
         quote = provider.get_quote(payload.symbol)
@@ -195,7 +201,7 @@ def buy(payload: BuyRequest, db: Session = Depends(get_db)) -> Trade:
 def buy_market(
     payload: MarketBuyRequest,
     db: Session = Depends(get_db),
-    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+    provider: FugleIntradayMarketDataProvider = Depends(get_fugle_market_data_provider),
 ) -> Trade:
     try:
         return MarketOrderService(db, provider).buy(payload)
@@ -212,7 +218,7 @@ def sell(payload: SellRequest, db: Session = Depends(get_db)) -> Trade:
 def sell_market(
     payload: MarketSellRequest,
     db: Session = Depends(get_db),
-    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+    provider: FugleIntradayMarketDataProvider = Depends(get_fugle_market_data_provider),
 ) -> Trade:
     try:
         return MarketOrderService(db, provider).sell(payload)
@@ -229,7 +235,7 @@ def sell_424(payload: StrategySellRequest, db: Session = Depends(get_db)) -> Tra
 def sell_424_market(
     payload: MarketStrategySellRequest,
     db: Session = Depends(get_db),
-    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+    provider: FugleIntradayMarketDataProvider = Depends(get_fugle_market_data_provider),
 ) -> Trade:
     try:
         return MarketOrderService(db, provider).sell_next_424_stage(payload)
@@ -241,7 +247,7 @@ def sell_424_market(
 def place_order(
     payload: LimitOrderCreate,
     db: Session = Depends(get_db),
-    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+    provider: FallbackIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
 ) -> LimitOrder:
     try:
         return LimitOrderPlacementService(db, provider).place(payload)
@@ -305,7 +311,7 @@ def market_quote(symbol: str) -> MarketQuoteRead:
 @router.get("/market-data/intraday/{symbol}", response_model=IntradayQuoteRead)
 def intraday_market_quote(
     symbol: str,
-    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+    provider: FallbackIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
 ) -> IntradayQuoteRead:
     try:
         return provider.get_quote(symbol)
@@ -316,7 +322,7 @@ def intraday_market_quote(
 @router.get("/market-data/intraday/{symbol}/limits", response_model=PriceLimitsRead)
 def intraday_price_limits(
     symbol: str,
-    provider: FugleIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
+    provider: FallbackIntradayMarketDataProvider = Depends(get_intraday_market_data_provider),
 ) -> PriceLimitsRead:
     try:
         return provider.get_price_limits(symbol)
